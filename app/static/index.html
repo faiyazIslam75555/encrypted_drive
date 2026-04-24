@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Secure Vault — Encrypted Notes &amp; Files</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+<!-- ───────────── TOAST ───────────── -->
+<div id="toast" class="toast hidden"></div>
+
+<!-- ───────────── NAV ───────────── -->
+<nav class="navbar">
+  <div class="nav-brand">
+    <span class="brand-icon">🔐</span>
+    <span class="brand-text">Secure<span class="brand-accent">Vault</span></span>
+  </div>
+  <div class="nav-links" id="navLinks">
+    <button class="nav-btn active" data-page="auth" id="navAuth">Authentication</button>
+    <button class="nav-btn" data-page="vault" id="navVault">Vault</button>
+  </div>
+  <div class="nav-status" id="navStatus">
+    <span class="status-dot offline"></span>
+    <span class="status-text">Not logged in</span>
+  </div>
+</nav>
+
+<!-- ───────────── MAIN ───────────── -->
+<main class="container">
+
+  <!-- ═══════ AUTH PAGE ═══════ -->
+  <section id="pageAuth" class="page active">
+    <div class="auth-wrapper">
+
+      <!-- REGISTER CARD -->
+      <div class="card glass" id="registerCard">
+        <div class="card-header">
+          <h2>Create Account</h2>
+          <p class="subtitle">Register to generate your RSA &amp; ECC key pairs</p>
+        </div>
+        <form id="registerForm" class="form-stack">
+          <div class="input-group">
+            <label for="regUsername">Username</label>
+            <input id="regUsername" type="text" placeholder="e.g. alice" required />
+          </div>
+          <div class="input-group">
+            <label for="regPassword">Password</label>
+            <input id="regPassword" type="password" placeholder="Strong password" required />
+          </div>
+          <div class="input-group">
+            <label for="regEmail">Email <span class="dim">(for OTP)</span></label>
+            <input id="regEmail" type="email" placeholder="alice@example.com" required />
+          </div>
+          <button type="submit" class="btn btn-primary" id="regSubmit">
+            <span class="btn-text">Register</span>
+            <span class="spinner hidden"></span>
+          </button>
+        </form>
+
+        <!-- KEY DISPLAY (shown after registration) -->
+        <div id="keyDisplay" class="key-display hidden">
+          <div class="alert alert-warning">
+            <strong>⚠️ Save these keys!</strong> They will NOT be shown again.
+          </div>
+          <div class="key-group">
+            <label>RSA Private Key</label>
+            <textarea id="rsaPrivKeyOut" readonly rows="3"></textarea>
+            <button class="btn btn-small btn-copy" data-target="rsaPrivKeyOut">Copy</button>
+          </div>
+          <div class="key-group">
+            <label>ECC Private Key</label>
+            <textarea id="eccPrivKeyOut" readonly rows="2"></textarea>
+            <button class="btn btn-small btn-copy" data-target="eccPrivKeyOut">Copy</button>
+          </div>
+          <div class="key-group">
+            <label>RSA Public Key</label>
+            <textarea id="rsaPubKeyOut" readonly rows="2"></textarea>
+          </div>
+        </div>
+      </div>
+
+      <!-- LOGIN CARD -->
+      <div class="card glass" id="loginCard">
+        <div class="card-header">
+          <h2>Login</h2>
+          <p class="subtitle">Two-factor authentication with OTP</p>
+        </div>
+
+        <!-- STEP 1 -->
+        <form id="loginStep1Form" class="form-stack">
+          <div class="step-badge">Step 1 — Password</div>
+          <div class="input-group">
+            <label for="loginUsername">Username</label>
+            <input id="loginUsername" type="text" placeholder="alice" required />
+          </div>
+          <div class="input-group">
+            <label for="loginPassword">Password</label>
+            <input id="loginPassword" type="password" placeholder="Your password" required />
+          </div>
+          <div class="input-group">
+            <label for="loginEmail">Email</label>
+            <input id="loginEmail" type="email" placeholder="alice@example.com" required />
+          </div>
+          <button type="submit" class="btn btn-primary" id="login1Submit">
+            <span class="btn-text">Verify Password</span>
+            <span class="spinner hidden"></span>
+          </button>
+        </form>
+
+        <!-- STEP 2 -->
+        <form id="loginStep2Form" class="form-stack hidden">
+          <div class="step-badge step-badge-active">Step 2 — OTP Verification</div>
+          <p class="otp-info">Check your <strong>terminal console</strong> for the OTP code<br/>
+             <span class="dim">(printed as [DEV-OTP] user=… otp=XXXXXX)</span></p>
+          <div class="input-group">
+            <label for="otpCode">6-Digit OTP</label>
+            <input id="otpCode" type="text" maxlength="6" placeholder="000000" required
+                   pattern="[0-9]{6}" inputmode="numeric" class="otp-input" />
+          </div>
+          <button type="submit" class="btn btn-primary" id="login2Submit">
+            <span class="btn-text">Verify OTP &amp; Login</span>
+            <span class="spinner hidden"></span>
+          </button>
+        </form>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════ VAULT PAGE ═══════ -->
+  <section id="pageVault" class="page">
+    <div class="vault-wrapper">
+
+      <!-- PRIVATE KEYS CARD (required for encrypt/decrypt) -->
+      <div class="card glass full-width" id="keysCard">
+        <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
+          <div>
+            <h2>🔑 Your Private Keys</h2>
+            <p class="subtitle">Securely stored in memory for this session</p>
+          </div>
+          <button class="btn btn-small btn-secondary" id="toggleKeysBtn">Show / Edit</button>
+        </div>
+        <div class="keys-row hidden" id="keysInner">
+          <div class="input-group">
+            <label for="userRsaPriv">RSA Private Key JSON</label>
+            <textarea id="userRsaPriv" rows="2" placeholder='{"d": ..., "n": ...}' style="-webkit-text-security: disc;"></textarea>
+          </div>
+          <div class="input-group">
+            <label for="userEccPriv">ECC Private Key D</label>
+            <input id="userEccPriv" type="password" placeholder="e.g. 286" />
+          </div>
+        </div>
+        <p class="dim" id="keysStatus">⚠️ Keys not set — upload/download will fail without them</p>
+      </div>
+
+      <!-- UPLOAD CARD -->
+      <div class="card glass">
+        <div class="card-header">
+          <h2>📤 Upload to Vault</h2>
+          <p class="subtitle">Files are encrypted with the hybrid pipeline (SPN + RSA + ECDSA)</p>
+        </div>
+        <form id="uploadForm" class="form-stack">
+          <div class="file-drop" id="fileDrop">
+            <input type="file" id="fileInput" class="file-input" />
+            <div class="file-drop-content">
+              <span class="file-icon">📁</span>
+              <p>Drag &amp; drop or <strong>click to browse</strong></p>
+              <p class="dim" id="fileName">No file selected</p>
+            </div>
+          </div>
+          <button type="submit" class="btn btn-primary" id="uploadSubmit" disabled>
+            <span class="btn-text">Encrypt &amp; Upload</span>
+            <span class="spinner hidden"></span>
+          </button>
+        </form>
+        <div id="uploadResult" class="result-box hidden"></div>
+      </div>
+
+      <!-- DOWNLOAD CARD -->
+      <div class="card glass">
+        <div class="card-header">
+          <h2>📥 Download from Vault</h2>
+          <p class="subtitle">Verify signature, decrypt key, then decrypt payload</p>
+        </div>
+        <form id="downloadForm" class="form-stack">
+          <div class="input-group">
+            <label for="vaultId">Vault ID</label>
+            <input id="vaultId" type="number" min="1" placeholder="e.g. 1" required />
+          </div>
+          <button type="submit" class="btn btn-primary" id="downloadSubmit">
+            <span class="btn-text">Decrypt &amp; Download</span>
+            <span class="spinner hidden"></span>
+          </button>
+        </form>
+        <div id="downloadResult" class="result-box hidden"></div>
+        <div id="downloadPreview" class="preview-box hidden" style="margin-top:1rem; padding: 1rem; background:rgba(0,0,0,0.3); border-radius:8px; text-align:center;">
+          <!-- JS will render an img, pre, or download button here -->
+        </div>
+      </div>
+
+      <!-- VAULT ENTRIES LIST -->
+      <div class="card glass full-width">
+        <div class="card-header">
+          <h2>🗄️ Your Vault Entries</h2>
+          <button class="btn btn-small btn-secondary" id="refreshVault">Refresh</button>
+        </div>
+        <div id="vaultList" class="vault-list">
+          <p class="dim">Login and upload files to see them here.</p>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+</main>
+
+<!-- ───────────── CRYPTO PIPELINE VISUALIZATION ───────────── -->
+<footer class="pipeline-footer">
+  <div class="pipeline">
+    <div class="pipe-step">
+      <span class="pipe-num">1</span>
+      <span>SPN-CBC Encrypt</span>
+    </div>
+    <span class="pipe-arrow">→</span>
+    <div class="pipe-step">
+      <span class="pipe-num">2</span>
+      <span>RSA Encrypt Key</span>
+    </div>
+    <span class="pipe-arrow">→</span>
+    <div class="pipe-step">
+      <span class="pipe-num">3</span>
+      <span>ECDSA Sign MAC</span>
+    </div>
+    <span class="pipe-arrow">→</span>
+    <div class="pipe-step">
+      <span class="pipe-num">4</span>
+      <span>Store in DB</span>
+    </div>
+  </div>
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
