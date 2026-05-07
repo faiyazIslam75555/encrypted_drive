@@ -7,6 +7,7 @@ Implements:
   • Custom JWT-style session token (dictionary serialisation + ECDSA).
   • OTP generation & email delivery via smtplib.
   • FastAPI dependency ``get_current_user`` for RBAC.
+  • ``require_admin`` dependency for admin-only endpoints.
 """
 
 import json
@@ -120,16 +121,18 @@ def _compute_token_hash(payload_bytes: bytes) -> int:
     return h
 
 
-def create_session_token(user_id: int) -> str:
+def create_session_token(user_id: int, role: str = "user") -> str:
     """
     Build a custom JWT-style token:
 
         <base64(payload_json)>.<base64(signature_json)>
 
     The payload is a JSON dict; the signature is ECDSA over its hash.
+    Includes the user role in the payload for RBAC.
     """
     payload = {
         "sub": user_id,
+        "role": role,
         "iat": int(time.time()),
         "exp": int(time.time()) + SESSION_EXPIRY_SECONDS,
     }
@@ -150,9 +153,10 @@ def create_session_token(user_id: int) -> str:
     return f"{payload_b64}.{sig_b64}"
 
 
-def verify_session_token(token: str) -> int:
+def verify_session_token(token: str) -> dict:
     """
-    Verify a session token and return the ``user_id``.
+    Verify a session token and return the payload dict
+    containing ``sub`` (user_id) and ``role``.
 
     Raises HTTPException 401 on invalid / expired tokens.
     """
@@ -187,10 +191,10 @@ def verify_session_token(token: str) -> int:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                             detail="Token expired")
 
-    return payload["sub"]
+    return payload
 
 # =====================================================================
-#  4.  RBAC MIDDLEWARE — FastAPI Dependency
+#  4.  RBAC MIDDLEWARE — FastAPI Dependencies
 # =====================================================================
 
 def get_current_user(
@@ -211,9 +215,25 @@ def get_current_user(
                             detail="Authorization header must be "
                                    "'Bearer <token>'")
 
-    user_id = verify_session_token(token)
+    payload = verify_session_token(token)
+    user_id = payload["sub"]
     user = db.query(User).filter(User.id == user_id).first()
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                             detail="User not found")
     return user
+
+
+def require_admin(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """
+    FastAPI dependency that ensures the current user has admin role.
+    Raises 403 Forbidden if the user is not an admin.
+    """
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required",
+        )
+    return current_user

@@ -295,3 +295,130 @@ def deserialize_ecc_public_key(data: str):
     if d["x"] is None:
         return IDENTITY
     return (d["x"], d["y"])
+
+# =====================================================================
+#  10.  ECC ENCRYPTION / DECRYPTION (ECIES-like)
+# =====================================================================
+#
+#  Uses Elliptic Curve Integrated Encryption Scheme:
+#    Encrypt:
+#      1. Generate ephemeral keypair (k, R = k·G)
+#      2. Compute shared point S = k · recipient_pubkey
+#      3. Derive key stream from hash of S
+#      4. XOR plaintext with key stream
+#      5. Return (R, ciphertext)
+#
+#    Decrypt:
+#      1. Compute S = private_key · R
+#      2. Derive same key stream
+#      3. XOR to recover plaintext
+# =====================================================================
+
+def _derive_stream(shared_point, length: int) -> bytes:
+    """
+    Derive a byte stream of given length from a shared EC point.
+    Uses the custom hash function in counter mode.
+    """
+    if shared_point is IDENTITY:
+        raise ValueError("Shared point is identity — invalid")
+    sx, sy = shared_point
+    stream = bytearray()
+    counter = 0
+    while len(stream) < length:
+        # Hash the shared secret with a counter
+        block_data = f"{sx}:{sy}:{counter}".encode("utf-8")
+        h = custom_data_hash(block_data)
+        # Convert hash integer to 32 bytes
+        h_bytes = []
+        temp = h
+        for _ in range(32):
+            h_bytes.append(temp & 0xFF)
+            temp >>= 8
+        stream.extend(h_bytes)
+        counter += 1
+    return bytes(stream[:length])
+
+
+def ecc_encrypt(plaintext_bytes: bytes, recipient_public_key) -> dict:
+    """
+    Encrypt data using ECIES-like scheme with the recipient's ECC public key.
+
+    Parameters
+    ----------
+    plaintext_bytes      : bytes — data to encrypt.
+    recipient_public_key : (x, y) — recipient's ECC public key point.
+
+    Returns
+    -------
+    dict with:
+      "R" : {"x": ..., "y": ...}  — ephemeral public key
+      "ct": [int, ...]            — ciphertext as list of byte values
+    """
+    # Generate ephemeral keypair
+    k = random.randrange(1, N)
+    R = scalar_multiply(k, G)
+
+    # Compute shared secret
+    S = scalar_multiply(k, recipient_public_key)
+    if S is IDENTITY:
+        raise ValueError("Degenerate shared secret")
+
+    # Derive key stream
+    stream = _derive_stream(S, len(plaintext_bytes))
+
+    # XOR encrypt
+    ct = bytes(a ^ b for a, b in zip(plaintext_bytes, stream))
+
+    return {
+        "R": {"x": R[0], "y": R[1]},
+        "ct": list(ct),
+    }
+
+
+def ecc_decrypt(encrypted: dict, private_key: int) -> bytes:
+    """
+    Decrypt ECIES-encrypted data using the recipient's ECC private key.
+
+    Parameters
+    ----------
+    encrypted   : dict with "R" and "ct" keys.
+    private_key : int — recipient's ECC private key.
+
+    Returns
+    -------
+    bytes — decrypted plaintext.
+    """
+    R = (encrypted["R"]["x"], encrypted["R"]["y"])
+    ct = bytes(encrypted["ct"])
+
+    # Compute shared secret
+    S = scalar_multiply(private_key, R)
+    if S is IDENTITY:
+        raise ValueError("Degenerate shared secret")
+
+    # Derive key stream
+    stream = _derive_stream(S, len(ct))
+
+    # XOR decrypt
+    return bytes(a ^ b for a, b in zip(ct, stream))
+
+
+def ecc_encrypt_session_key(sym_key: int, recipient_public_key) -> str:
+    """
+    Encrypt a symmetric session key with the recipient's ECC public key.
+    Returns JSON string of the encrypted key.
+    """
+    # Convert int key to bytes (8 bytes for 64-bit key)
+    key_bytes = sym_key.to_bytes(8, "big")
+    encrypted = ecc_encrypt(key_bytes, recipient_public_key)
+    return json.dumps(encrypted)
+
+
+def ecc_decrypt_session_key(encrypted_json: str, private_key: int) -> int:
+    """
+    Decrypt an ECC-encrypted symmetric session key.
+    Returns the integer session key.
+    """
+    encrypted = json.loads(encrypted_json)
+    key_bytes = ecc_decrypt(encrypted, private_key)
+    return int.from_bytes(key_bytes, "big")

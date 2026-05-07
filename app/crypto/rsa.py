@@ -294,3 +294,68 @@ def generate_salt(length: int = 32) -> str:
     """Generate a random alphanumeric salt string."""
     alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
     return "".join(random.choice(alphabet) for _ in range(length))
+
+# =====================================================================
+#  10.  DETERMINISTIC RSA KEY DERIVATION FROM ECC PRIVATE KEY
+# =====================================================================
+
+def _seeded_hash(seed: int, counter: int) -> int:
+    """
+    Produce a deterministic 256-bit integer from (seed, counter).
+    Uses the custom password hash with synthetic salt.
+    """
+    data = f"RSA-DERIVE-{seed}-{counter}"
+    h = custom_password_hash(data, "deterministic-rsa-salt")
+    return int(h, 16)
+
+
+def _seeded_prime(seed: int, label: str, bits: int = 256) -> int:
+    """
+    Deterministically generate a prime of *bits* length from a seed.
+    Uses sequential hash attempts until a prime is found.
+    """
+    counter = 0
+    tag = f"{seed}-{label}"
+    tag_int = int(custom_password_hash(str(tag), "prime-gen"), 16)
+    while True:
+        h = _seeded_hash(tag_int, counter)
+        # Force the number to be exactly `bits` bits long and odd
+        candidate = h | (1 << (bits - 1)) | 1
+        # Mask to `bits` length
+        candidate = candidate & ((1 << bits) - 1)
+        candidate = candidate | (1 << (bits - 1)) | 1
+        if is_prime(candidate):
+            return candidate
+        counter += 1
+
+
+def derive_rsa_keypair_from_seed(ecc_private_key: int, bits: int = 256):
+    """
+    Deterministically derive an RSA key pair from an ECC private key.
+
+    This allows the user to only remember their ECC private key —
+    the RSA key pair can always be regenerated from it.
+
+    Parameters
+    ----------
+    ecc_private_key : int — the user's ECC private key integer.
+    bits            : int — bit-length per prime (modulus ≈ 2×bits).
+
+    Returns
+    -------
+    public_key  : (e, n)
+    private_key : (d, n)
+    """
+    p = _seeded_prime(ecc_private_key, "prime-p", bits)
+    q = _seeded_prime(ecc_private_key, "prime-q", bits)
+
+    # Ensure p ≠ q
+    if p == q:
+        q = _seeded_prime(ecc_private_key, "prime-q-alt", bits)
+
+    n   = p * q
+    phi = (p - 1) * (q - 1)
+    e   = 65537
+
+    d = mod_inverse(e, phi)
+    return (e, n), (d, n)
