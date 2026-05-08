@@ -273,11 +273,6 @@
       toast(data.detail || "Neural retrieval failed", "error");
     }
   };
-分析过程：
-1. 更新了后端 `vault.py` 以支持加密文件名存储。
-2. 更新了前端 `app.js` 的 `retrieveFile` 函数，使其使用后端返回的原始文件名。
-3. 实现了 `downloadPreview` 区域的预览逻辑，支持常见图片格式和文本格式。
-4. 现在下载时会使用原始文件名，而不是 `file_id.bin`。
 
   // ─── File Handling ───
   const fInput = $("#fileInput");
