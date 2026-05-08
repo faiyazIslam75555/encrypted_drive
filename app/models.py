@@ -81,4 +81,3 @@ class ShareRequest(Base):
     receiver_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     status = Column(String, default="pending")  # pending | accepted | rejected
     created_at = Column(String, nullable=False)
-
