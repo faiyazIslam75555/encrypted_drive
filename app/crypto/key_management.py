@@ -11,14 +11,19 @@ from .rsa import generate_rsa_keys
 from .hash import scratch_hash
 import random
 
+# Global cache to prevent re-generating RSA primes (expensive) during a session
+KEY_CACHE = {}
+
 def derive_full_key_package(master_ecc_priv_str: str):
     """
-    Given the Master ECC Private Key, derive:
-    1. The ECC Public Key
-    2. The RSA Keypair (deterministically)
+    Derives RSA and ECC keys from a single seed.
+    Caches the result to speed up subsequent requests.
     
     This fulfills the requirement that the user only remembers the ECC key.
     """
+    if master_ecc_priv_str in KEY_CACHE:
+        return KEY_CACHE[master_ecc_priv_str]
+
     try:
         if master_ecc_priv_str.startswith('0x'):
             priv_int = int(master_ecc_priv_str, 16)
@@ -41,9 +46,11 @@ def derive_full_key_package(master_ecc_priv_str: str):
     # RSA Key Generation (1024 bits for balance of security/performance in pure python)
     rsa_pub, rsa_priv = generate_rsa_keys(bits=1024)
     
-    return {
-        "ecc_priv": ecc_priv,
+    res = {
+        "ecc_priv": priv_int,
         "ecc_pub": ecc_pub,
         "rsa_pub": rsa_pub,
         "rsa_priv": rsa_priv
     }
+    KEY_CACHE[master_ecc_priv_str] = res
+    return res

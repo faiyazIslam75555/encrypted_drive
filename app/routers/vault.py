@@ -47,13 +47,14 @@ async def upload_file(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    keys = derive_full_key_package(ecc_private_key)
+    # 2. Hybrid Encryption: AES for file, ECC to wrap the AES key
+    from app.crypto.asymmetric_vault import hybrid_encrypt_ecc
+    ecc_pub = (int(keys["ecc_pub"][0]), int(keys["ecc_pub"][1]))
+    wrapped_key, ciphertext = hybrid_encrypt_ecc(file_bytes, ecc_pub)
     
-    file_bytes = await file.read()
-    file_size = len(file_bytes)
-    
-    # 1. Strictly Asymmetric Encryption (No AES/Symmetric)
-    encrypted_payload = encrypt_file_asymmetric(file_bytes, keys["rsa_pub"])
+    # Store the wrapped key in mac_hash or a new column (using mac_hash for now)
+    encrypted_payload = ciphertext
+    stored_wrapped_key = wrapped_key
     
     # 2. MAC + Signature
     mac, sig = secure_sign_and_mac(file_bytes, keys["ecc_priv"])
@@ -66,7 +67,7 @@ async def upload_file(
         filename_encrypted=enc_filename,
         encrypted_payload=encrypted_payload,
         digital_signature=json.dumps({"r": hex(sig[0]), "s": hex(sig[1])}),
-        mac_hash=mac,
+        mac_hash=stored_wrapped_key, # Store the ECC-wrapped AES key here
         file_size=file_size,
         uploaded_at=datetime.datetime.utcnow().isoformat()
     )
@@ -123,14 +124,17 @@ async def download_file(
         raise HTTPException(status_code=404, detail="File not found")
     
     try:
-        decrypted_bytes = decrypt_file_asymmetric(entry.encrypted_payload, keys["rsa_priv"])
-        decrypted_filename = decrypt_string_asymmetric(entry.filename_encrypted, keys["rsa_priv"])
-    except Exception:
-        raise HTTPException(status_code=400, detail="Decryption failed. Invalid Master Key.")
+        from app.crypto.asymmetric_vault import hybrid_decrypt_ecc
+        # The AES ciphertext is in encrypted_payload
+        # The Wrapped Key is in mac_hash
+        plaintext = hybrid_decrypt_ecc(entry.mac_hash, entry.encrypted_payload, keys["ecc_priv"])
+        filename = decrypt_string_asymmetric(entry.filename_encrypted, keys["rsa_priv"])
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Hybrid Decryption failed: {str(e)}")
     
     return {
-        "filename": decrypted_filename, 
-        "data_hex": decrypted_bytes.hex()
+        "filename": filename, 
+        "data_hex": plaintext.hex()
     }
 
 # ─── Delete File ───

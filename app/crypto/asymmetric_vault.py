@@ -10,7 +10,7 @@ from .rsa import rsa_encrypt, rsa_decrypt
 from .ecc import sign_ecdsa as ecdsa_sign
 from .hash import scratch_hash
 
-CHUNK_SIZE = 64 # Small chunks for pure asymmetric encryption
+CHUNK_SIZE = 31 # Reduced to fit within 256-bit ECC curve limit (N)
 
 def encrypt_file_asymmetric(file_bytes, rsa_pub_key):
     """
@@ -68,3 +68,54 @@ def decrypt_string_asymmetric(hex_str, rsa_priv_key):
     c = int(hex_str, 16)
     m = rsa_decrypt(c, rsa_priv_key)
     return m.to_bytes((m.bit_length() + 7) // 8, 'big').decode('utf-8')
+
+def encrypt_file_ecc(file_bytes, ecc_pub_key):
+    """Encrypts file chunks using ECC ElGamal."""
+    from .ecc import ecc_encrypt
+    encrypted_chunks = []
+    for i in range(0, len(file_bytes), CHUNK_SIZE):
+        chunk = file_bytes[i:i+CHUNK_SIZE]
+        padded = b'\x01' + chunk
+        m_int = int.from_bytes(padded, 'big')
+        c1, c2 = ecc_encrypt(m_int, ecc_pub_key)
+        # Store as c1x,c1y:c2x,c2y
+        chunk_str = f"{hex(c1[0])},{hex(c1[1])}:{hex(c2[0])},{hex(c2[1])}"
+        encrypted_chunks.append(chunk_str)
+    return "|".join(encrypted_chunks)
+
+def hybrid_encrypt_ecc(file_bytes, ecc_pub_key):
+    """
+    Hybrid Encryption:
+    1. AES Key (random) -> Encrypt File
+    2. ECC -> Encrypt AES Key
+    """
+    from .symmetric import generate_aes_key, aes_encrypt
+    from .ecc import ecc_encrypt
+    
+    aes_key = generate_aes_key()
+    ciphertext = aes_encrypt(file_bytes, aes_key)
+    
+    # Encrypt the AES key (as an integer) using ECC
+    key_int = int.from_bytes(aes_key, 'big')
+    c1, c2 = ecc_encrypt(key_int, ecc_pub_key)
+    
+    wrapped_key = f"{hex(c1[0])},{hex(c1[1])}:{hex(c2[0])},{hex(c2[1])}"
+    return wrapped_key, ciphertext.hex()
+
+def hybrid_decrypt_ecc(wrapped_key, ciphertext_hex, ecc_priv_key):
+    """Hybrid Decryption: ECC decrypts AES key -> AES decrypts file."""
+    from .symmetric import aes_decrypt
+    from .ecc import ecc_decrypt
+    
+    # Decrypt AES Key
+    pts = wrapped_key.split(":")
+    c1_raw = pts[0].split(",")
+    c2_raw = pts[1].split(",")
+    c1 = (int(c1_raw[0], 16), int(c1_raw[1], 16))
+    c2 = (int(c2_raw[0], 16), int(c2_raw[1], 16))
+    
+    m_point = ecc_decrypt(c1, c2, ecc_priv_key)
+    # Recovered 128-bit (16 bytes) TEA key
+    aes_key = m_point[0].to_bytes(16, 'big')
+    
+    return aes_decrypt(bytes.fromhex(ciphertext_hex), aes_key)

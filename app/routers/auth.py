@@ -27,17 +27,17 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)):
     ecc_priv, ecc_pub = generate_ecc_keys()
     ecc_priv_str = hex(ecc_priv)
     
-    # 2. Derive RSA Keys deterministically from ECC Priv
-    # (Simplified for this version: we use a seed from the ECC priv)
-    import random
-    random.seed(scratch_hash(ecc_priv_str))
-    rsa_pub, rsa_priv = generate_rsa_keys(bits=1024)
+    # 2. Derive RSA Keys deterministically from ECC Priv using the central service
+    from app.crypto.key_management import derive_full_key_package
+    keys = derive_full_key_package(ecc_priv_str)
+    rsa_pub = keys["rsa_pub"]
     
     # 3. Encrypt identity with the generated RSA Public Key
     enc_username = hex(encrypt_string(body.username, rsa_pub))
     enc_email = hex(encrypt_string(body.email, rsa_pub))
     
     # 4. Hash password with scratch hash
+    import random
     salt = hex(random.getrandbits(64))
     pw_hash = scratch_hash(body.password + salt)
     

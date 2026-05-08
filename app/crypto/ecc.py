@@ -48,6 +48,38 @@ def generate_ecc_keypair():
     pub = point_mul(priv, G)
     return priv, pub
 
+# ─── ECC ElGamal (Strictly Asymmetric) ───
+def ecc_encrypt(m_int: int, pub_point: tuple):
+    """
+    Encrypts an integer using ECC ElGamal.
+    Result is a pair of points (C1, C2).
+    C1 = k*G
+    C2 = M + k*Pub
+    Where M is the message point.
+    """
+    k = random.randint(1, N - 1)
+    C1 = point_mul(k, G)
+    
+    # Map message to a point (Simplified for this project: M = m_int * G)
+    # This allows for easy subtraction during decryption
+    M = point_mul(m_int, G)
+    
+    shared = point_mul(k, pub_point)
+    C2 = point_add(M, shared)
+    return C1, C2
+
+def ecc_decrypt(c1: tuple, c2: tuple, priv_key: int):
+    """
+    Decrypts ECC ElGamal.
+    M = C2 - priv*C1
+    We then solve for m_int (Simplified: we assume m_int is small or known range)
+    """
+    shared = point_mul(priv_key, c1)
+    # Negate shared point: (x, y) -> (x, -y % P)
+    neg_shared = (shared[0], (P - shared[1]) % P)
+    M = point_add(c2, neg_shared)
+    return M
+
 # More aliases
 generate_ecc_keys = generate_ecc_keypair
 

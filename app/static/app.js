@@ -9,9 +9,11 @@
     try { const d = JSON.parse(localStorage.getItem("ds")); sessionToken = d.t; currentUserId = d.u; eccPrivateKey = d.k; } catch { }
   }
   function toast(msg, type = "success") {
-    const el = $("#toast"); if (!el) return;
-    el.className = `toast ${type} show`; el.textContent = msg;
-    setTimeout(() => el.classList.remove("show"), 3500);
+    const t = document.createElement("div");
+    t.className = `toast toast-${type}`;
+    t.innerHTML = msg; 
+    $("#toastContainer").appendChild(t);
+    setTimeout(() => t.remove(), 5000);
   }
   window.toast = toast;
 
@@ -159,6 +161,13 @@
     else { toast(data.detail || "Failed", "error"); btn.disabled = false; btn.textContent = "Share Now"; }
   };
 
+  async function deriveFullKeyPackage(key) {
+    // Instead of doing slow math in JS, we ask the server for our derived package
+    const { ok, data } = await api("GET", `/me?ecc_private_key=${encodeURIComponent(key)}`);
+    if (ok) return data.keys;
+    return null;
+  }
+
   // ── File List ──
   async function refreshFiles() {
     const list = $("#fileList"); if (!list) return;
@@ -176,22 +185,29 @@
       const received = receivedRes.ok ? receivedRes.data : [];
       const sentReqs = sentReqRes.ok ? sentReqRes.data : [];
 
-      // Badge on incoming
-      const pendingCount = received.length;
+      const pending = received.filter(r => r.status === "pending");
+      const others = received.filter(r => r.status !== "pending" && r.status !== "rejected");
 
       list.innerHTML = `<div style="padding:1.5rem;max-width:760px;">
 
-        ${pendingCount ? `
-        <div style="background:linear-gradient(135deg,rgba(99,102,241,0.15),rgba(139,92,246,0.1));border:1px solid var(--accent);border-radius:12px;padding:1.25rem;margin-bottom:1.5rem;">
-          <h4 style="margin:0 0 1rem;color:var(--accent);"><span class="material-icons-outlined" style="vertical-align:middle;font-size:1.1rem;">notifications_active</span> ${pendingCount} Incoming Request${pendingCount>1?"s":""}</h4>
-          ${received.map(r => `
-            <div style="display:flex;justify-content:space-between;align-items:center;padding:0.75rem;background:var(--surface-2);border-radius:8px;margin-bottom:0.5rem;">
-              <div>
-                <strong>${esc(r.sender_name)}</strong> wants to share a file with you
-              </div>
+        ${pending.length || others.length ? `
+        <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:12px;padding:1.25rem;margin-bottom:1.5rem;">
+          <h4 style="margin:0 0 1rem;color:var(--accent);"><span class="material-icons-outlined" style="vertical-align:middle;font-size:1.1rem;">notifications_active</span> Incoming Requests</h4>
+          
+          ${pending.map(r => `
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:0.75rem;background:var(--surface);border-radius:8px;margin-bottom:0.5rem;border-left:4px solid var(--accent);">
+              <div><strong>${esc(r.sender_name)}</strong> wants to share a file</div>
               <div style="display:flex;gap:0.5rem;">
                 <button class="btn-primary" style="font-size:0.8rem;" onclick="window._acceptReq(${r.id})">✓ Accept</button>
                 <button class="btn-icon" style="color:#ef4444;" onclick="window._rejectReq(${r.id})"><span class="material-icons-outlined">close</span></button>
+              </div>
+            </div>`).join("")}
+
+          ${others.map(r => `
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:0.75rem;background:rgba(34,197,94,0.05);border-radius:8px;margin-bottom:0.5rem;border:1px dashed rgba(34,197,94,0.2);">
+              <div style="color:var(--text-secondary);">Accepted from <strong>${esc(r.sender_name)}</strong></div>
+              <div style="display:flex;align-items:center;color:#22c55e;gap:0.25rem;font-size:0.8rem;font-weight:600;">
+                <span class="material-icons-outlined" style="font-size:1rem;">check</span> ${r.status.toUpperCase()}
               </div>
             </div>`).join("")}
         </div>` : ""}
@@ -209,7 +225,7 @@
           ${sentReqs.map(r => `
             <div class="file-item">
               <div class="file-name"><span class="material-icons-outlined" style="color:var(--accent);">send</span><span>Request to <strong>${esc(r.receiver_name)}</strong></span></div>
-              <span class="file-size" style="color:${r.status==="accepted"?"#22c55e":r.status==="rejected"?"#ef4444":"var(--text-secondary)"};">${r.status}</span>
+              <span class="file-size" style="color:${r.status === "accepted" ? "#22c55e" : r.status === "rejected" ? "#ef4444" : "var(--text-secondary)"};">${r.status}</span>
               ${r.status === "accepted" ? `
                 <div style="display:flex;gap:0.5rem;align-items:center;">
                   <select id="sendFile${r.id}" style="padding:0.35rem;border-radius:6px;background:var(--surface);color:var(--text);border:1px solid var(--border);font-size:0.8rem;">
@@ -230,7 +246,7 @@
         ucont.innerHTML = filtered.map(u => `
           <div style="display:flex;align-items:center;justify-content:space-between;padding:0.9rem 1rem;margin-bottom:0.5rem;background:var(--surface-2);border-radius:10px;">
             <div style="display:flex;align-items:center;gap:0.75rem;">
-              <div style="width:38px;height:38px;border-radius:50%;background:linear-gradient(135deg,var(--accent),#8b5cf6);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;">${(u.name||"?")[0].toUpperCase()}</div>
+              <div style="width:38px;height:38px;border-radius:50%;background:linear-gradient(135deg,var(--accent),#8b5cf6);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;">${(u.name || "?")[0].toUpperCase()}</div>
               <div><strong>${esc(u.name)}</strong><br><small style="color:var(--text-secondary);">ID #${u.id}</small></div>
             </div>
             <button class="btn-primary" style="font-size:0.85rem;" onclick="window._sendReq(${u.id}, this)">
@@ -270,6 +286,7 @@
         <span class="file-date">${fmtDate(f.uploaded_at)}</span>
         <span class="file-size">${fmtSize(f.file_size)}</span>
         <div class="file-actions">
+          <button class="btn-icon" title="Rename" onclick="window._renameFile(${f.id}, '${esc(f.filename)}')"><span class="material-icons-outlined">edit</span></button>
           <button class="btn-icon" title="Download" onclick="window._dlFile(${f.id})"><span class="material-icons-outlined">download</span></button>
           <button class="btn-icon" title="Share" onclick="window._openShareModal(${f.id})"><span class="material-icons-outlined">share</span></button>
           <button class="btn-icon" title="Delete" onclick="window._delFile(${f.id})"><span class="material-icons-outlined">delete</span></button>
@@ -311,7 +328,6 @@
   };
 
 
-
   // ── File Actions ──
   window._dlFile = async id => {
     if (!eccPrivateKey) return toast("Set key first", "error");
@@ -323,8 +339,14 @@
     if (!eccPrivateKey) return toast("Set key first", "error");
     showDecrypt("Decrypting shared file..."); const { ok, data } = await api("GET", `/share/download/${id}?ecc_private_key=${encodeURIComponent(eccPrivateKey)}`);
     hideDecrypt(); if (!ok) return toast(data.detail || "Failed", "error");
-    preview(data.filename, hex2bytes(data.data_hex));
-    if (data.mac_verified) toast("✓ MAC Integrity Verified!");
+    if (data.mac_verified) {
+      toast(`
+        <div style="text-align:left;">
+          <div style="font-weight:bold;color:#22c55e;margin-bottom:2px;">🛡️ Data Integrity Audit: 100% Verified</div>
+          <div style="font-size:0.75rem;opacity:0.9;">Cryptographic MAC match confirmed. No data corruption detected during transit.</div>
+        </div>
+      `, "success");
+    }
   };
   window._delFile = async id => {
     if (!confirm("Delete permanently?")) return;
@@ -335,7 +357,7 @@
   // ── Preview ──
   function preview(name, bytes) {
     const url = URL.createObjectURL(new Blob([bytes])), ext = (name || "").split(".").pop().toLowerCase();
-    let h = ["png","jpg","jpeg","gif","webp"].includes(ext) ? `<img src="${url}" style="max-width:100%;border-radius:8px;" />` : `<pre style="max-height:400px;overflow:auto;">${esc(new TextDecoder().decode(bytes))}</pre>`;
+    let h = ["png", "jpg", "jpeg", "gif", "webp"].includes(ext) ? `<img src="${url}" style="max-width:100%;border-radius:8px;" />` : `<pre style="max-height:400px;overflow:auto;">${esc(new TextDecoder().decode(bytes))}</pre>`;
     h += `<div style="margin-top:1rem;text-align:center;"><a href="${url}" download="${esc(name)}" class="btn-primary"><span class="material-icons-outlined">download</span> Save ${esc(name)}</a></div>`;
     $("#previewContent").innerHTML = h; $("#previewTitle").textContent = name; $("#previewModal").style.display = "flex";
   }
@@ -350,14 +372,35 @@
   function fmtSize(b) { if (!b) return "--"; return b < 1024 ? b + " B" : b < 1048576 ? (b / 1024).toFixed(1) + " KB" : (b / 1048576).toFixed(1) + " MB"; }
   function fmtDate(iso) { if (!iso) return "--"; try { return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" }); } catch { return "--"; } }
   function esc(s) { return (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
-  function iconName(f) { if (!f) return "description"; const e = f.split(".").pop().toLowerCase(); return { png:"image",jpg:"image",jpeg:"image",gif:"image",pdf:"picture_as_pdf",txt:"description",md:"description",js:"code",py:"code",zip:"folder_zip" }[e] || "description"; }
-  function iconClass(f) { if (!f) return ""; const e = f.split(".").pop().toLowerCase(); return ["png","jpg","jpeg","gif","webp"].includes(e) ? "file-icon-img" : ["pdf"].includes(e) ? "file-icon-pdf" : ""; }
+  function iconName(f) { if (!f) return "description"; const e = f.split(".").pop().toLowerCase(); return { png: "image", jpg: "image", jpeg: "image", gif: "image", pdf: "picture_as_pdf", txt: "description", md: "description", js: "code", py: "code", zip: "folder_zip" }[e] || "description"; }
+  function iconClass(f) { if (!f) return ""; const e = f.split(".").pop().toLowerCase(); return ["png", "jpg", "jpeg", "gif", "webp"].includes(e) ? "file-icon-img" : ["pdf"].includes(e) ? "file-icon-pdf" : ""; }
 
+  window._renameFile = async (id, oldName) => {
+    const newName = prompt("Enter new filename:", oldName);
+    if (!newName || newName === oldName) return;
+    if (!eccPrivateKey) return toast("Set key first", "error");
+    
+    // Encrypt the new name locally
+    const keys = deriveFullKeyPackage(eccPrivateKey);
+    const m = BigInt("0x" + Array.from(new TextEncoder().encode(newName)).map(b => b.toString(16).padStart(2, '0')).join(''));
+    const enc = "0x" + power(m, BigInt(keys.rsa_pub[0]), BigInt(keys.rsa_pub[1])).toString(16);
+    
+    const { ok } = await api("POST", `/vault/rename/${id}`, { new_name_encrypted: enc });
+    if (ok) { toast("Renamed"); refreshFiles(); }
+  };
+
+  window._updateProfile = async () => {
+    const newName = prompt("Enter new display name:");
+    if (!newName) return;
+    const { ok } = await api("POST", "/profile/update", { display_name: newName });
+    if (ok) { toast("Profile updated"); refreshFiles(); }
+  };
   // ── Nav ──
   $$(".sidebar-item").forEach(item => item.addEventListener("click", () => {
     $$(".sidebar-item").forEach(i => i.classList.remove("active")); item.classList.add("active");
     currentView = item.dataset.view; $("#viewTitle").textContent = item.innerText; refreshFiles();
   }));
+
   $("#refreshBtn")?.addEventListener("click", () => refreshFiles());
   $("#searchInput")?.addEventListener("input", e => {
     const q = e.target.value.toLowerCase();
