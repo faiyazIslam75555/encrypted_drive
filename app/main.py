@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from app.database import engine, Base
-from app.routers import auth, access, vault
+from app.routers import auth, access, vault, sharing
 
 # ---------------------------------------------------------------------------
 #  Create all tables on startup
@@ -41,6 +41,7 @@ app = FastAPI(
 app.include_router(auth.router)       # Role 1 — Identity
 app.include_router(access.router)     # Role 2 — Access / OTP
 app.include_router(vault.router)      # Role 3 — Hybrid Vault
+app.include_router(sharing.router)    # Neural Sharing
 
 # ---------------------------------------------------------------------------
 #  Static files & Frontend

@@ -23,6 +23,7 @@ def get_profile(
 ):
     result = {
         "user_id": current_user.id,
+        "username": current_user.display_name,
         "role": current_user.role,
         "created_at": current_user.created_at,
     }
@@ -156,9 +157,8 @@ def secure_reset(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """
-    "Secure Reset" option that deletes all stored encrypted data for the current user.
-    """
     db.query(Vault).filter(Vault.owner_id == current_user.id).delete()
     db.commit()
-    return {"message": "Secure reset complete. All your encrypted data has been permanently deleted."}
+    return {"message": "Secure reset complete."}
+
+

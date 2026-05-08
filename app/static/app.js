@@ -1,509 +1,372 @@
 (function () {
   "use strict";
-
   const API = "";
-  let sessionToken = null;
-  let currentUserId = null;
-  let eccPrivateKey = null;
+  let sessionToken = null, currentUserId = null, eccPrivateKey = null, currentView = "my-drive";
+  const $ = s => document.querySelector(s), $$ = s => document.querySelectorAll(s);
 
-  const $ = (sel) => document.querySelector(sel);
-  const $$ = (sel) => document.querySelectorAll(sel);
-
-  // ─── Persistence ───
-  function saveSession() {
-    localStorage.setItem("drive_session", JSON.stringify({
-      token: sessionToken, userId: currentUserId, masterKey: eccPrivateKey
-    }));
-  }
+  function saveSession() { localStorage.setItem("ds", JSON.stringify({ t: sessionToken, u: currentUserId, k: eccPrivateKey })); }
   function loadSession() {
-    const s = localStorage.getItem("drive_session");
-    if (!s) return;
-    try {
-      const d = JSON.parse(s);
-      sessionToken = d.token; currentUserId = d.userId; eccPrivateKey = d.masterKey;
-      if (eccPrivateKey && $("#userEccPriv")) $("#userEccPriv").value = eccPrivateKey;
-    } catch { localStorage.removeItem("drive_session"); }
+    try { const d = JSON.parse(localStorage.getItem("ds")); sessionToken = d.t; currentUserId = d.u; eccPrivateKey = d.k; } catch { }
   }
-
-  // ─── Toast ───
   function toast(msg, type = "success") {
     const el = $("#toast"); if (!el) return;
-    el.className = `toast ${type} show`;
-    el.textContent = msg;
+    el.className = `toast ${type} show`; el.textContent = msg;
     setTimeout(() => el.classList.remove("show"), 3500);
   }
+  window.toast = toast;
 
-  // ─── API Helper ───
-  async function api(method, path, body, isFormData = false) {
-    const headers = {};
-    if (sessionToken) headers["Authorization"] = `Bearer ${sessionToken}`;
-    if (!isFormData) headers["Content-Type"] = "application/json";
+  async function api(method, path, body, isForm = false) {
+    const h = {}; if (sessionToken) h["Authorization"] = `Bearer ${sessionToken}`;
+    if (!isForm) h["Content-Type"] = "application/json";
     try {
-      const resp = await fetch(`${API}${path}`, {
-        method, headers,
-        body: isFormData ? body : (body ? JSON.stringify(body) : undefined),
-      });
-      if (resp.status === 401) { logout(); return { ok: false, data: { detail: "Session expired" } }; }
-      const ct = resp.headers.get("content-type") || "";
-      const data = ct.includes("json") ? await resp.json() : { detail: await resp.text() };
-      return { ok: resp.ok, data };
-    } catch { return { ok: false, data: { detail: "Network Error" } }; }
+      const r = await fetch(API + path, { method, headers: h, body: isForm ? body : (body ? JSON.stringify(body) : undefined) });
+      if (r.status === 401) { logout(); return { ok: false, data: {} }; }
+      const d = (r.headers.get("content-type") || "").includes("json") ? await r.json() : {};
+      return { ok: r.ok, data: d };
+    } catch { return { ok: false, data: {} }; }
   }
 
-  // ─── Auth UI ───
-  function showAuthOverlay() {
-    $("#authOverlay").style.display = "flex";
-    $("#driveApp").style.display = "none";
+  // ── Auth ──
+  function showAuth() { $("#authOverlay").style.display = "flex"; $("#driveApp").style.display = "none"; }
+  function showApp() {
+    $("#authOverlay").style.display = "none"; $("#driveApp").style.display = "grid";
+    fetchUser(); checkBanner(); refreshFiles();
+    if (!eccPrivateKey) setTimeout(() => { openSettings(); toast("Enter Master Key", "error"); }, 500);
   }
-  function showDriveApp() {
-    $("#authOverlay").style.display = "none";
-    $("#driveApp").style.display = "grid";
-    fetchUserInfo();
-    checkKeyBanner();
-    refreshFiles();
-    // Auto-open settings if no key set
-    if (!eccPrivateKey) {
-      setTimeout(() => {
-        openSettings();
-        toast("Please enter your Master Key to decrypt files", "error");
-      }, 500);
-    }
-  }
-  function logout() {
-    sessionToken = null; currentUserId = null; eccPrivateKey = null;
-    localStorage.removeItem("drive_session");
-    showAuthOverlay();
-    toast("Signed out", "error");
-  }
+  function logout() { sessionToken = currentUserId = eccPrivateKey = null; localStorage.removeItem("ds"); showAuth(); }
 
-  // Auth Tabs
-  $$(".auth-tab").forEach(tab => {
-    tab.addEventListener("click", () => {
-      $$(".auth-tab").forEach(t => t.classList.remove("active"));
-      tab.classList.add("active");
-      const target = tab.dataset.tab;
-      $$(".auth-form").forEach(f => f.style.display = "none");
-      const form = $(`[data-form="${target}"]`);
-      if (form) form.style.display = "flex";
-      $("#keyDisplay").style.display = "none";
-    });
-  });
-
-  // Register
-  $("#registerForm")?.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const btn = $("#regSubmit"); btn.disabled = true;
-    const { ok, data } = await api("POST", "/register", {
-      username: $("#regUsername").value,
-      password: $("#regPassword").value,
-      email: $("#regEmail").value
-    });
-    btn.disabled = false;
-    if (!ok) return toast(data.detail || "Registration failed", "error");
-    toast("Account created!");
-    eccPrivateKey = data.ecc_private_key;
-    $("#eccPrivKeyOut").value = eccPrivateKey;
-    $("#registerForm").style.display = "none";
-    $("#keyDisplay").style.display = "block";
-  });
-
-  // Copy key
-  $("#copyKeyBtn")?.addEventListener("click", () => {
-    const key = $("#eccPrivKeyOut").value;
-    navigator.clipboard.writeText(key).then(() => toast("Key copied!"));
-  });
-
-  // Key saved -> go to login
-  $("#keySavedBtn")?.addEventListener("click", () => {
+  $$(".auth-tab").forEach(t => t.addEventListener("click", () => {
+    $$(".auth-tab").forEach(x => x.classList.remove("active")); t.classList.add("active");
+    $$(".auth-form").forEach(f => f.style.display = "none");
+    const f = $(`[data-form="${t.dataset.tab}"]`); if (f) f.style.display = "flex";
     $("#keyDisplay").style.display = "none";
-    $("#tabLogin").click();
+  }));
+
+  $("#registerForm")?.addEventListener("submit", async e => {
+    e.preventDefault();
+    const { ok, data } = await api("POST", "/register", { username: $("#regUsername").value, password: $("#regPassword").value, email: $("#regEmail").value });
+    if (!ok) return toast(data.detail || "Failed", "error");
+    eccPrivateKey = data.ecc_private_key; $("#eccPrivKeyOut").value = eccPrivateKey;
+    $("#registerForm").style.display = "none"; $("#keyDisplay").style.display = "block"; toast("Account created!");
+  });
+  $("#copyKeyBtn")?.addEventListener("click", () => navigator.clipboard.writeText($("#eccPrivKeyOut").value).then(() => toast("Copied!")));
+  $("#keySavedBtn")?.addEventListener("click", () => { $("#keyDisplay").style.display = "none"; $("#tabLogin").click(); });
+
+  $("#loginStep1Form")?.addEventListener("submit", async e => {
+    e.preventDefault();
+    const { ok, data } = await api("POST", "/login/step1", { email: $("#loginEmail").value, password: $("#loginPassword").value });
+    if (!ok) return toast(data.detail || "Failed", "error");
+    currentUserId = data.user_id; $("#loginStep1Form").style.display = "none"; $("#loginStep2Form").style.display = "flex";
+  });
+  $("#loginStep2Form")?.addEventListener("submit", async e => {
+    e.preventDefault();
+    const { ok, data } = await api("POST", "/login/step2", { user_id: currentUserId, otp_code: $("#otpCode").value });
+    if (!ok) return toast(data.detail || "Failed", "error");
+    sessionToken = data.token; saveSession(); showApp();
   });
 
-  // Login Step 1
-  $("#loginStep1Form")?.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const btn = $("#login1Submit"); btn.disabled = true;
-    const { ok, data } = await api("POST", "/login/step1", {
-      email: $("#loginEmail").value, password: $("#loginPassword").value
-    });
-    btn.disabled = false;
-    if (!ok) return toast(data.detail || "Invalid credentials", "error");
+  async function fetchUser() {
+    const kp = eccPrivateKey ? `?ecc_private_key=${encodeURIComponent(eccPrivateKey)}` : "";
+    const { ok, data } = await api("GET", `/me${kp}`);
+    if (!ok) return;
     currentUserId = data.user_id;
-    $("#loginStep1Form").style.display = "none";
-    $("#loginStep2Form").style.display = "flex";
-    toast("Check console for OTP code");
-  });
-
-  // Login Step 2
-  $("#loginStep2Form")?.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const btn = $("#login2Submit"); btn.disabled = true;
-    const { ok, data } = await api("POST", "/login/step2", {
-      user_id: currentUserId, otp_code: $("#otpCode").value
-    });
-    btn.disabled = false;
-    if (!ok) return toast(data.detail || "Invalid OTP", "error");
-    sessionToken = data.token;
-    saveSession();
-    toast("Welcome back!");
-    showDriveApp();
-  });
-
-  // ─── User Info ───
-  function setUserDisplay(name, email) {
-    const initial = (name || "U").charAt(0).toUpperCase();
-    $("#userAvatar").textContent = initial;
-    $("#dropdownAvatar").textContent = initial;
-    $("#dropdownName").textContent = name || `User ${currentUserId}`;
-    $("#dropdownEmail").textContent = email || `ID: ${currentUserId || "--"}`;
+    const n = data.username || `User ${data.user_id}`;
+    $("#userAvatar").textContent = n[0].toUpperCase();
+    $("#dropdownAvatar").textContent = n[0].toUpperCase();
+    $("#dropdownName").textContent = n;
+    $("#dropdownEmail").textContent = data.email || `ID: ${data.user_id}`;
   }
 
-  async function fetchUserInfo() {
-    setUserDisplay(null, null); // show defaults first
-    const keyParam = eccPrivateKey ? `?ecc_private_key=${encodeURIComponent(eccPrivateKey)}` : "";
-    const { ok, data } = await api("GET", `/me${keyParam}`);
-    if (ok) {
-      currentUserId = data.user_id;
-      setUserDisplay(data.username || `User ${data.user_id}`, data.email || `Role: ${data.role}`);
-    }
-  }
-
-  // User menu toggle
-  $("#userAvatar")?.addEventListener("click", (e) => {
-    e.stopPropagation();
-    const dd = $("#userDropdown");
-    dd.style.display = dd.style.display === "none" ? "block" : "none";
-  });
-  document.addEventListener("click", () => { if ($("#userDropdown")) $("#userDropdown").style.display = "none"; });
+  $("#userAvatar")?.addEventListener("click", e => { e.stopPropagation(); const d = $("#userDropdown"); d.style.display = d.style.display === "none" ? "block" : "none"; });
+  document.addEventListener("click", () => { const d = $("#userDropdown"); if (d) d.style.display = "none"; });
   $("#logoutBtn")?.addEventListener("click", logout);
 
-  // ─── Key Banner ───
-  function checkKeyBanner() {
-    const banner = $("#keyBanner");
-    if (!banner) return;
-    banner.style.display = eccPrivateKey ? "none" : "flex";
-  }
-  $("#keyBannerBtn")?.addEventListener("click", () => openSettings());
+  // ── Key Banner ──
+  function checkBanner() { const b = $("#keyBanner"); if (b) b.style.display = eccPrivateKey ? "none" : "flex"; }
+  $("#keyBannerBtn")?.addEventListener("click", openSettings);
 
-  // ─── Settings Modal ───
-  function openSettings() {
-    $("#settingsModal").style.display = "flex";
-    if (eccPrivateKey) $("#userEccPriv").value = eccPrivateKey;
-  }
+  // ── Settings ──
+  function openSettings() { $("#settingsModal").style.display = "flex"; if (eccPrivateKey) $("#userEccPriv").value = eccPrivateKey; }
   $("#settingsBtn")?.addEventListener("click", openSettings);
-  $("#closeSettingsModal")?.addEventListener("click", () => { $("#settingsModal").style.display = "none"; });
-
+  $("#closeSettingsModal")?.addEventListener("click", () => $("#settingsModal").style.display = "none");
   $("#syncKeysBtn")?.addEventListener("click", () => {
-    eccPrivateKey = $("#userEccPriv").value.trim();
-    if (!eccPrivateKey) return toast("Please enter your key", "error");
-    saveSession();
-    checkKeyBanner();
-    toast("Key synced! Refreshing files...");
-    $("#settingsModal").style.display = "none";
-    fetchUserInfo();
-    refreshFiles();
+    eccPrivateKey = $("#userEccPriv").value.trim(); if (!eccPrivateKey) return toast("Enter key", "error");
+    saveSession(); checkBanner(); $("#settingsModal").style.display = "none"; fetchUser(); refreshFiles(); toast("Key synced!");
   });
-
   $("#secureResetBtn")?.addEventListener("click", async () => {
-    if (!confirm("Permanently delete ALL your encrypted files?")) return;
-    const { ok } = await api("POST", "/vault/reset");
-    if (ok) { toast("All files deleted"); refreshFiles(); }
-    else toast("Reset failed", "error");
+    if (!confirm("Delete ALL files?")) return;
+    const { ok } = await api("POST", "/vault/reset"); if (ok) { toast("Deleted"); refreshFiles(); }
   });
 
-  // ─── Upload Modal ───
-  function openUploadModal() {
-    if (!eccPrivateKey) { toast("Set your Master Key in Settings first", "error"); openSettings(); return; }
+  // ── Upload ──
+  $("#uploadTrigger")?.addEventListener("click", () => {
+    if (!eccPrivateKey) { openSettings(); return toast("Set key first", "error"); }
+    $("#fileInput").value = ""; $("#uploadDrop").style.display = "flex";
+    $("#uploadFileInfo").style.display = "none"; $("#uploadSubmit").disabled = true;
     $("#uploadModal").style.display = "flex";
-    resetUploadForm();
-  }
-  function resetUploadForm() {
-    $("#fileInput").value = "";
-    $("#uploadDrop").style.display = "flex";
-    $("#uploadFileInfo").style.display = "none";
-    $("#uploadSubmit").disabled = true;
-  }
-
-  $("#uploadTrigger")?.addEventListener("click", openUploadModal);
-  $("#emptyUploadBtn")?.addEventListener("click", openUploadModal);
-  $("#closeUploadModal")?.addEventListener("click", () => { $("#uploadModal").style.display = "none"; });
-
-  // File selection
+  });
+  $("#closeUploadModal")?.addEventListener("click", () => $("#uploadModal").style.display = "none");
   $("#uploadDrop")?.addEventListener("click", () => $("#fileInput").click());
-  $("#uploadDrop")?.addEventListener("dragover", (e) => { e.preventDefault(); e.currentTarget.classList.add("dragover"); });
-  $("#uploadDrop")?.addEventListener("dragleave", (e) => { e.currentTarget.classList.remove("dragover"); });
-  $("#uploadDrop")?.addEventListener("drop", (e) => {
-    e.preventDefault(); e.currentTarget.classList.remove("dragover");
-    if (e.dataTransfer.files.length) { $("#fileInput").files = e.dataTransfer.files; showSelectedFile(); }
-  });
-
-  $("#fileInput")?.addEventListener("change", showSelectedFile);
-  function showSelectedFile() {
-    const file = $("#fileInput").files[0];
-    if (!file) return;
-    $("#uploadDrop").style.display = "none";
-    $("#uploadFileInfo").style.display = "flex";
-    $("#uploadFileName").textContent = file.name;
-    $("#uploadFileSize").textContent = formatSize(file.size);
-    $("#uploadFileIcon").textContent = getFileIconName(file.name);
+  $("#fileInput")?.addEventListener("change", () => {
+    const f = $("#fileInput").files[0]; if (!f) return;
+    $("#uploadDrop").style.display = "none"; $("#uploadFileInfo").style.display = "flex";
+    $("#uploadFileName").textContent = f.name; $("#uploadFileSize").textContent = fmtSize(f.size);
     $("#uploadSubmit").disabled = false;
-  }
-  $("#clearFileBtn")?.addEventListener("click", resetUploadForm);
-
-  // Upload submit
-  $("#uploadForm")?.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const file = $("#fileInput").files[0];
-    if (!file) return;
-    const btn = $("#uploadSubmit"); btn.disabled = true;
-    btn.innerHTML = '<span class="material-icons-outlined">hourglass_top</span> Encrypting...';
-    const fd = new FormData();
-    fd.append("file", file);
-    fd.append("ecc_private_key", eccPrivateKey);
+  });
+  $("#clearFileBtn")?.addEventListener("click", () => {
+    $("#fileInput").value = ""; $("#uploadDrop").style.display = "flex";
+    $("#uploadFileInfo").style.display = "none"; $("#uploadSubmit").disabled = true;
+  });
+  $("#uploadForm")?.addEventListener("submit", async e => {
+    e.preventDefault(); const fd = new FormData();
+    fd.append("file", $("#fileInput").files[0]); fd.append("ecc_private_key", eccPrivateKey);
+    const btn = $("#uploadSubmit"); btn.disabled = true; btn.textContent = "Encrypting...";
     const { ok } = await api("POST", "/vault/upload", fd, true);
-    btn.disabled = false;
-    btn.innerHTML = '<span class="material-icons-outlined">upload</span> Encrypt & Upload';
-    if (ok) {
-      toast("File encrypted & uploaded!");
-      $("#uploadModal").style.display = "none";
-      refreshFiles();
-    } else { toast("Upload failed", "error"); }
+    btn.disabled = false; btn.innerHTML = '<span class="material-icons-outlined">upload</span> Encrypt & Upload';
+    if (ok) { toast("Uploaded!"); $("#uploadModal").style.display = "none"; refreshFiles(); }
+    else toast("Upload failed", "error");
   });
 
-  // ─── File List ───
-  async function refreshFiles() {
-    const list = $("#fileList");
-    if (!list) return;
-    const keyParam = eccPrivateKey ? `?ecc_private_key=${encodeURIComponent(eccPrivateKey)}` : "";
-    const { ok, data } = await api("GET", `/vault/list${keyParam}`);
-    if (!ok) return;
+  // ── Share Modal (one-click) ──
+  let shareFileId = null;
+  window._openShareModal = id => {
+    if (!eccPrivateKey) { openSettings(); return toast("Set key first", "error"); }
+    shareFileId = id; $("#userSearchResults").innerHTML = ""; $("#userSearchInput").value = "";
+    $("#shareModal").style.display = "flex";
+    // Auto-search on open
+    doUserSearch();
+  };
+  $("#closeShareModal")?.addEventListener("click", () => $("#shareModal").style.display = "none");
 
+  $("#userSearchBtn")?.addEventListener("click", doUserSearch);
+  async function doUserSearch() {
+    const { ok, data } = await api("GET", "/users/search");
+    if (!ok || !data.length) { $("#userSearchResults").innerHTML = '<p style="padding:1rem;color:var(--text-secondary);">No other users found.</p>'; return; }
+    $("#userSearchResults").innerHTML = data.map(u => `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:0.75rem 1rem;border-bottom:1px solid var(--border);">
+        <div><strong>${u.name}</strong> <span style="color:var(--text-secondary);font-size:0.8rem;">(ID #${u.id})</span><br><small style="color:var(--text-secondary);">RSA Key ✓</small></div>
+        <button class="btn-primary" style="font-size:0.85rem;" data-uid="${u.id}" data-pubkey='${u.public_key.replace(/'/g, "\\'")}' onclick="window._shareNow(this)">Share Now</button>
+      </div>`).join("");
+  }
+
+  window._shareNow = async btn => {
+    const uid = parseInt(btn.dataset.uid), pubkey = btn.dataset.pubkey;
+    btn.disabled = true; btn.textContent = "Encrypting...";
+    const { ok, data } = await api("POST", "/share/send", {
+      vault_id: shareFileId, target_user_id: uid, target_pub_key: pubkey, ecc_private_key: eccPrivateKey
+    });
+    if (ok) { toast("File shared!"); $("#shareModal").style.display = "none"; }
+    else { toast(data.detail || "Failed", "error"); btn.disabled = false; btn.textContent = "Share Now"; }
+  };
+
+  // ── File List ──
+  async function refreshFiles() {
+    const list = $("#fileList"); if (!list) return;
+
+    // ── SHARING CENTER ──
+    if (currentView === "sharing-center") {
+      const [usersRes, filesRes, receivedRes, sentReqRes] = await Promise.all([
+        api("GET", "/users/search"),
+        api("GET", `/vault/list${eccPrivateKey ? "?ecc_private_key=" + encodeURIComponent(eccPrivateKey) : ""}`),
+        api("GET", "/share/requests/received"),
+        api("GET", "/share/requests/sent")
+      ]);
+      const users = usersRes.ok ? usersRes.data : [];
+      const myFiles = filesRes.ok ? (filesRes.data.entries || []) : [];
+      const received = receivedRes.ok ? receivedRes.data : [];
+      const sentReqs = sentReqRes.ok ? sentReqRes.data : [];
+
+      // Badge on incoming
+      const pendingCount = received.length;
+
+      list.innerHTML = `<div style="padding:1.5rem;max-width:760px;">
+
+        ${pendingCount ? `
+        <div style="background:linear-gradient(135deg,rgba(99,102,241,0.15),rgba(139,92,246,0.1));border:1px solid var(--accent);border-radius:12px;padding:1.25rem;margin-bottom:1.5rem;">
+          <h4 style="margin:0 0 1rem;color:var(--accent);"><span class="material-icons-outlined" style="vertical-align:middle;font-size:1.1rem;">notifications_active</span> ${pendingCount} Incoming Request${pendingCount>1?"s":""}</h4>
+          ${received.map(r => `
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:0.75rem;background:var(--surface-2);border-radius:8px;margin-bottom:0.5rem;">
+              <div>
+                <strong>${esc(r.sender_name)}</strong> wants to share a file with you
+              </div>
+              <div style="display:flex;gap:0.5rem;">
+                <button class="btn-primary" style="font-size:0.8rem;" onclick="window._acceptReq(${r.id})">✓ Accept</button>
+                <button class="btn-icon" style="color:#ef4444;" onclick="window._rejectReq(${r.id})"><span class="material-icons-outlined">close</span></button>
+              </div>
+            </div>`).join("")}
+        </div>` : ""}
+
+        <h4 style="margin-bottom:1rem;"><span class="material-icons-outlined" style="vertical-align:middle;">person_search</span> Find & Request Users</h4>
+        <div style="display:flex;gap:0.5rem;margin-bottom:1rem;">
+          <input id="scSearch" class="settings-input" placeholder="Type a username..." style="flex:1;" />
+          <button class="btn-primary" onclick="window._scDoSearch()"><span class="material-icons-outlined">search</span> Search</button>
+        </div>
+        <div id="scUserList"><p style="color:var(--text-secondary);">Click Search to find users.</p></div>
+
+        ${sentReqs.length ? `
+        <div style="margin-top:2rem;border-top:1px solid var(--border);padding-top:1.5rem;">
+          <h4 style="margin-bottom:1rem;"><span class="material-icons-outlined" style="vertical-align:middle;">outbound</span> My Sent Requests</h4>
+          ${sentReqs.map(r => `
+            <div class="file-item">
+              <div class="file-name"><span class="material-icons-outlined" style="color:var(--accent);">send</span><span>Request to <strong>${esc(r.receiver_name)}</strong></span></div>
+              <span class="file-size" style="color:${r.status==="accepted"?"#22c55e":r.status==="rejected"?"#ef4444":"var(--text-secondary)"};">${r.status}</span>
+              ${r.status === "accepted" ? `
+                <div style="display:flex;gap:0.5rem;align-items:center;">
+                  <select id="sendFile${r.id}" style="padding:0.35rem;border-radius:6px;background:var(--surface);color:var(--text);border:1px solid var(--border);font-size:0.8rem;">
+                    <option value="">Pick file...</option>
+                    ${myFiles.map(f => `<option value="${f.id}">${esc(f.filename)}</option>`).join("")}
+                  </select>
+                  <button class="btn-primary" style="font-size:0.8rem;white-space:nowrap;" onclick="window._sendFile(${r.id}, this)">Encrypt & Send</button>
+                </div>` : ""}
+            </div>`).join("")}
+        </div>` : ""}
+      </div>`;
+
+      const ucont = $("#scUserList");
+      window._scDoSearch = () => {
+        const filter = ($("#scSearch")?.value || "").toLowerCase();
+        const filtered = filter ? users.filter(u => u.name.toLowerCase().includes(filter)) : users;
+        if (!filtered.length) { ucont.innerHTML = '<p style="color:var(--text-secondary);">No users found.</p>'; return; }
+        ucont.innerHTML = filtered.map(u => `
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:0.9rem 1rem;margin-bottom:0.5rem;background:var(--surface-2);border-radius:10px;">
+            <div style="display:flex;align-items:center;gap:0.75rem;">
+              <div style="width:38px;height:38px;border-radius:50%;background:linear-gradient(135deg,var(--accent),#8b5cf6);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;">${(u.name||"?")[0].toUpperCase()}</div>
+              <div><strong>${esc(u.name)}</strong><br><small style="color:var(--text-secondary);">ID #${u.id}</small></div>
+            </div>
+            <button class="btn-primary" style="font-size:0.85rem;" onclick="window._sendReq(${u.id}, this)">
+              <span class="material-icons-outlined" style="font-size:1rem;">person_add</span> Send Request
+            </button>
+          </div>`).join("");
+        setTimeout(() => { $("#scSearch")?.addEventListener("keydown", e => { if (e.key === "Enter") window._scDoSearch(); }); }, 0);
+      };
+      return;
+    }
+
+    // ── SHARED WITH ME ──
+    if (currentView === "shared") {
+      const { ok, data } = await api("GET", "/share/inbox");
+      if (!ok) return;
+      $("#storageText").textContent = `${data.length} shared`;
+      list.innerHTML = data.length ? data.map(s => `
+        <div class="file-item">
+          <div class="file-name"><span class="material-icons-outlined" style="color:var(--accent);">share</span><span>Shared File #${s.vault_id} · from User #${s.from_id}</span></div>
+          <span class="file-date">${fmtDate(s.date)}</span><span class="file-size"></span>
+          <div class="file-actions">
+            <button class="btn-icon" title="Decrypt & Download" onclick="window._dlShared(${s.id})"><span class="material-icons-outlined">download</span></button>
+          </div>
+        </div>`).join("") : '<div class="empty-state"><span class="material-icons-outlined empty-icon">people</span><h3>Nothing shared yet</h3><p>Files shared with you appear here</p></div>';
+      return;
+    }
+
+    // ── MY DRIVE (default) ──
+    const kp = eccPrivateKey ? `?ecc_private_key=${encodeURIComponent(eccPrivateKey)}` : "";
+    const { ok, data } = await api("GET", `/vault/list${kp}`);
+    if (!ok) return;
     const entries = data.entries || [];
     $("#storageText").textContent = `${entries.length} file${entries.length !== 1 ? "s" : ""} encrypted`;
-
-    if (entries.length === 0) {
-      list.innerHTML = `
-        <div class="empty-state">
-          <span class="material-icons-outlined empty-icon">cloud_upload</span>
-          <h3>No files yet</h3>
-          <p>Upload your first file to get started</p>
-          <button class="btn-primary" onclick="document.getElementById('uploadTrigger').click()">
-            <span class="material-icons-outlined">upload_file</span> Upload File
-          </button>
-        </div>`;
-      return;
-    }
-
-    list.innerHTML = entries.map(f => {
-      const icon = getFileIconName(f.filename);
-      const iconClass = getFileIconClass(f.filename);
-      const date = formatDate(f.uploaded_at);
-      const size = formatSize(f.file_size || 0);
-      return `
-        <div class="file-item" data-id="${f.id}">
-          <div class="file-name">
-            <span class="material-icons-outlined ${iconClass}">${icon}</span>
-            <span>${escapeHtml(f.filename)}</span>
-          </div>
-          <span class="file-date">${date}</span>
-          <span class="file-size">${size}</span>
-          <div class="file-actions">
-            <button class="btn-icon" title="Download" onclick="event.stopPropagation(); window._downloadFile(${f.id})">
-              <span class="material-icons-outlined">download</span>
-            </button>
-            <button class="btn-icon" title="Delete" onclick="event.stopPropagation(); window._deleteFile(${f.id})">
-              <span class="material-icons-outlined">delete</span>
-            </button>
-          </div>
-        </div>`;
-    }).join("");
+    list.innerHTML = entries.length ? entries.map(f => `
+      <div class="file-item">
+        <div class="file-name"><span class="material-icons-outlined ${iconClass(f.filename)}">${iconName(f.filename)}</span><span>${esc(f.filename)}</span></div>
+        <span class="file-date">${fmtDate(f.uploaded_at)}</span>
+        <span class="file-size">${fmtSize(f.file_size)}</span>
+        <div class="file-actions">
+          <button class="btn-icon" title="Download" onclick="window._dlFile(${f.id})"><span class="material-icons-outlined">download</span></button>
+          <button class="btn-icon" title="Share" onclick="window._openShareModal(${f.id})"><span class="material-icons-outlined">share</span></button>
+          <button class="btn-icon" title="Delete" onclick="window._delFile(${f.id})"><span class="material-icons-outlined">delete</span></button>
+        </div>
+      </div>`).join("") : '<div class="empty-state"><span class="material-icons-outlined empty-icon">cloud_upload</span><h3>No files</h3><p>Upload your first file</p></div>';
   }
 
-  // ─── Download with Progress Bar ───
-  function setDecryptProgress(percent, stage) {
-    const bar = $("#decryptBar");
-    const pct = $("#decryptPercent");
-    const stg = $("#decryptStage");
-    if (bar) bar.style.width = percent + "%";
-    if (pct) pct.textContent = percent + "%";
-    if (stg) stg.textContent = stage;
-  }
-
-  function showDecryptOverlay() {
-    const overlay = $("#decryptOverlay");
-    const box = overlay?.querySelector(".decrypt-box");
-    if (box) box.classList.remove("complete");
-    if (overlay) overlay.style.display = "flex";
-    $("#decryptTitle").textContent = "Decrypting File...";
-    setDecryptProgress(0, "Initializing asymmetric pipeline");
-  }
-
-  function hideDecryptOverlay(delay = 600) {
-    setTimeout(() => {
-      const overlay = $("#decryptOverlay");
-      if (overlay) overlay.style.display = "none";
-    }, delay);
-  }
-
-  window._downloadFile = async (id) => {
-    if (!eccPrivateKey) { toast("Set your Master Key first", "error"); openSettings(); return; }
-
-    showDecryptOverlay();
-
-    // Stage 1: Fetching encrypted payload
-    setDecryptProgress(15, "Fetching encrypted payload from vault...");
-    await new Promise(r => setTimeout(r, 400));
-
-    setDecryptProgress(30, "Deriving RSA key pair from Master Key...");
-    await new Promise(r => setTimeout(r, 300));
-
-    const { ok, data } = await api("GET", `/vault/download/${id}?ecc_private_key=${encodeURIComponent(eccPrivateKey)}`);
-
-    if (!ok) {
-      hideDecryptOverlay(0);
-      toast(data.detail || "Download failed", "error");
-      return;
-    }
-
-    // Stage 2: Decrypting chunks
-    setDecryptProgress(50, "Decrypting RSA-encrypted chunks...");
-    await new Promise(r => setTimeout(r, 400));
-
-    setDecryptProgress(65, "Recovering original filename...");
-    await new Promise(r => setTimeout(r, 300));
-
-    try {
-      setDecryptProgress(80, "Reassembling file from decrypted blocks...");
-      await new Promise(r => setTimeout(r, 300));
-
-      const bytes = new Uint8Array(data.data_hex.match(/.{1,2}/g).map(b => parseInt(b, 16)));
-      const blob = new Blob([bytes]);
-      const url = URL.createObjectURL(blob);
-      const ext = (data.filename || "").split('.').pop().toLowerCase();
-
-      setDecryptProgress(95, "Verifying digital signature (ECDSA)...");
-      await new Promise(r => setTimeout(r, 300));
-
-      // Complete
-      setDecryptProgress(100, "Decryption complete!");
-      $("#decryptTitle").textContent = "File Recovered!";
-      const box = $("#decryptOverlay")?.querySelector(".decrypt-box");
-      if (box) box.classList.add("complete");
-
-      await new Promise(r => setTimeout(r, 500));
-      hideDecryptOverlay(0);
-
-      // Show preview modal
-      const previewEl = $("#previewContent");
-      $("#previewTitle").textContent = data.filename;
-      let html = "";
-      if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) {
-        html = `<img src="${url}" alt="${escapeHtml(data.filename)}" />`;
-      } else if (['txt', 'md', 'js', 'py', 'json', 'csv', 'html', 'css', 'xml', 'log'].includes(ext)) {
-        html = `<pre>${escapeHtml(new TextDecoder().decode(bytes))}</pre>`;
-      } else {
-        html = `<p style="text-align:center;color:var(--text-secondary);">Preview not available for .${ext} files</p>`;
-      }
-      html += `<div class="preview-download"><a href="${url}" download="${escapeHtml(data.filename)}" class="btn-primary"><span class="material-icons-outlined">download</span> Download ${escapeHtml(data.filename)}</a></div>`;
-      previewEl.innerHTML = html;
-      $("#previewModal").style.display = "flex";
-      toast("File decrypted!");
-    } catch {
-      hideDecryptOverlay(0);
-      toast("Decryption failed", "error");
-    }
+  // ── Phase 1: Send Request ──
+  window._sendReq = async (uid, btn) => {
+    btn.disabled = true; btn.textContent = "Sending...";
+    const { ok, data } = await api("POST", `/share/request/${uid}`);
+    btn.disabled = false; btn.innerHTML = '<span class="material-icons-outlined" style="font-size:1rem;">person_add</span> Send Request';
+    if (ok) { toast("Request sent!"); refreshFiles(); }
+    else toast(data.detail || "Failed", "error");
   };
 
-  $("#closePreviewModal")?.addEventListener("click", () => { $("#previewModal").style.display = "none"; });
+  // ── Phase 2: Accept / Reject ──
+  window._acceptReq = async (id) => {
+    const { ok } = await api("POST", `/share/request/accept/${id}`);
+    if (ok) { toast("Request accepted!"); refreshFiles(); }
+  };
+  window._rejectReq = async (id) => {
+    const { ok } = await api("POST", `/share/request/reject/${id}`);
+    if (ok) { toast("Request rejected.", "error"); refreshFiles(); }
+  };
 
-  // ─── Delete ───
-  window._deleteFile = async (id) => {
-    if (!confirm("Delete this file permanently?")) return;
+  // ── Phase 3: Encrypt & Send File ──
+  window._sendFile = async (requestId, btn) => {
+    const sel = $(`#sendFile${requestId}`);
+    if (!sel || !sel.value) return toast("Pick a file first!", "error");
+    if (!eccPrivateKey) return toast("Set your Master Key first", "error");
+    btn.disabled = true; btn.textContent = "Encrypting...";
+    const { ok, data } = await api("POST", "/share/send", {
+      request_id: requestId, vault_id: parseInt(sel.value), ecc_private_key: eccPrivateKey
+    });
+    btn.disabled = false; btn.textContent = "Encrypt & Send";
+    if (ok) { toast("File encrypted & sent!"); refreshFiles(); }
+    else toast(data.detail || "Failed", "error");
+  };
+
+
+
+  // ── File Actions ──
+  window._dlFile = async id => {
+    if (!eccPrivateKey) return toast("Set key first", "error");
+    showDecrypt(); const { ok, data } = await api("GET", `/vault/download/${id}?ecc_private_key=${encodeURIComponent(eccPrivateKey)}`);
+    hideDecrypt(); if (!ok) return toast(data.detail || "Failed", "error");
+    preview(data.filename, hex2bytes(data.data_hex));
+  };
+  window._dlShared = async id => {
+    if (!eccPrivateKey) return toast("Set key first", "error");
+    showDecrypt("Decrypting shared file..."); const { ok, data } = await api("GET", `/share/download/${id}?ecc_private_key=${encodeURIComponent(eccPrivateKey)}`);
+    hideDecrypt(); if (!ok) return toast(data.detail || "Failed", "error");
+    preview(data.filename, hex2bytes(data.data_hex));
+    if (data.mac_verified) toast("✓ MAC Integrity Verified!");
+  };
+  window._delFile = async id => {
+    if (!confirm("Delete permanently?")) return;
     const { ok } = await api("DELETE", `/vault/${id}`);
-    if (ok) { toast("File deleted"); refreshFiles(); }
-    else toast("Delete failed", "error");
+    if (ok) { toast("Deleted"); refreshFiles(); }
   };
 
-  // ─── Search ───
-  $("#searchInput")?.addEventListener("input", (e) => {
-    const query = e.target.value.toLowerCase();
-    $$(".file-item").forEach(item => {
-      const name = item.querySelector(".file-name")?.textContent.toLowerCase() || "";
-      item.style.display = name.includes(query) ? "" : "none";
-    });
-  });
+  // ── Preview ──
+  function preview(name, bytes) {
+    const url = URL.createObjectURL(new Blob([bytes])), ext = (name || "").split(".").pop().toLowerCase();
+    let h = ["png","jpg","jpeg","gif","webp"].includes(ext) ? `<img src="${url}" style="max-width:100%;border-radius:8px;" />` : `<pre style="max-height:400px;overflow:auto;">${esc(new TextDecoder().decode(bytes))}</pre>`;
+    h += `<div style="margin-top:1rem;text-align:center;"><a href="${url}" download="${esc(name)}" class="btn-primary"><span class="material-icons-outlined">download</span> Save ${esc(name)}</a></div>`;
+    $("#previewContent").innerHTML = h; $("#previewTitle").textContent = name; $("#previewModal").style.display = "flex";
+  }
+  $("#closePreviewModal")?.addEventListener("click", () => $("#previewModal").style.display = "none");
 
-  // ─── Refresh ───
+  // ── Decrypt Overlay ──
+  function showDecrypt(t) { $("#decryptOverlay").style.display = "flex"; $("#decryptTitle").textContent = t || "Decrypting..."; }
+  function hideDecrypt() { setTimeout(() => $("#decryptOverlay").style.display = "none", 400); }
+
+  // ── Helpers ──
+  function hex2bytes(hex) { return new Uint8Array(hex.match(/.{1,2}/g).map(b => parseInt(b, 16))); }
+  function fmtSize(b) { if (!b) return "--"; return b < 1024 ? b + " B" : b < 1048576 ? (b / 1024).toFixed(1) + " KB" : (b / 1048576).toFixed(1) + " MB"; }
+  function fmtDate(iso) { if (!iso) return "--"; try { return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" }); } catch { return "--"; } }
+  function esc(s) { return (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+  function iconName(f) { if (!f) return "description"; const e = f.split(".").pop().toLowerCase(); return { png:"image",jpg:"image",jpeg:"image",gif:"image",pdf:"picture_as_pdf",txt:"description",md:"description",js:"code",py:"code",zip:"folder_zip" }[e] || "description"; }
+  function iconClass(f) { if (!f) return ""; const e = f.split(".").pop().toLowerCase(); return ["png","jpg","jpeg","gif","webp"].includes(e) ? "file-icon-img" : ["pdf"].includes(e) ? "file-icon-pdf" : ""; }
+
+  // ── Nav ──
+  $$(".sidebar-item").forEach(item => item.addEventListener("click", () => {
+    $$(".sidebar-item").forEach(i => i.classList.remove("active")); item.classList.add("active");
+    currentView = item.dataset.view; $("#viewTitle").textContent = item.innerText; refreshFiles();
+  }));
   $("#refreshBtn")?.addEventListener("click", () => refreshFiles());
-
-  // ─── Helpers ───
-  function getFileIconName(filename) {
-    if (!filename) return "description";
-    const ext = filename.split('.').pop().toLowerCase();
-    const map = {
-      png: "image", jpg: "image", jpeg: "image", gif: "image", webp: "image", svg: "image",
-      pdf: "picture_as_pdf",
-      doc: "description", docx: "description", txt: "description", md: "description",
-      xls: "table_chart", xlsx: "table_chart", csv: "table_chart",
-      mp3: "audiotrack", wav: "audiotrack", mp4: "movie", avi: "movie",
-      js: "code", py: "code", html: "code", css: "code", json: "code", xml: "code",
-      zip: "folder_zip", rar: "folder_zip", "7z": "folder_zip",
-    };
-    return map[ext] || "description";
-  }
-  function getFileIconClass(filename) {
-    if (!filename) return "file-icon-generic";
-    const ext = filename.split('.').pop().toLowerCase();
-    if (["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext)) return "file-icon-img";
-    if (ext === "pdf") return "file-icon-pdf";
-    if (["doc", "docx", "txt", "md"].includes(ext)) return "file-icon-doc";
-    if (["xls", "xlsx", "csv"].includes(ext)) return "file-icon-sheet";
-    if (["mp3", "wav", "mp4", "avi"].includes(ext)) return "file-icon-media";
-    if (["js", "py", "html", "css", "json", "xml"].includes(ext)) return "file-icon-code";
-    return "file-icon-generic";
-  }
-  function formatSize(bytes) {
-    if (!bytes || bytes === 0) return "--";
-    if (bytes < 1024) return bytes + " B";
-    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
-    return (bytes / 1048576).toFixed(1) + " MB";
-  }
-  function formatDate(iso) {
-    if (!iso) return "--";
-    try {
-      const d = new Date(iso);
-      return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-    } catch { return iso; }
-  }
-  function escapeHtml(str) {
-    if (!str) return "";
-    return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-  }
-
-  // Close modals on backdrop click
-  $$(".modal-backdrop").forEach(backdrop => {
-    backdrop.addEventListener("click", (e) => {
-      if (e.target === backdrop) backdrop.style.display = "none";
-    });
+  $("#searchInput")?.addEventListener("input", e => {
+    const q = e.target.value.toLowerCase();
+    $$(".file-item").forEach(i => { i.style.display = (i.querySelector(".file-name")?.textContent.toLowerCase() || "").includes(q) ? "" : "none"; });
   });
 
-  // ─── Sidebar Navigation ───
-  let currentView = "my-drive";
-  $$(".sidebar-item").forEach(item => {
-    item.addEventListener("click", (e) => {
-      e.preventDefault();
-      $$(".sidebar-item").forEach(i => i.classList.remove("active"));
-      item.classList.add("active");
-      currentView = item.dataset.view;
-      const titles = { "my-drive": "My Drive", "recent": "Recent Files", "encrypted": "Encrypted Files" };
-      $("#viewTitle").textContent = titles[currentView] || "My Drive";
-      refreshFiles();
-    });
-  });
+  // ── Close modals on backdrop ──
+  $$(".modal-backdrop").forEach(b => b.addEventListener("click", e => { if (e.target === b) b.style.display = "none"; }));
 
-  // ─── Init ───
-  loadSession();
-  if (sessionToken) { showDriveApp(); }
-  else { showAuthOverlay(); }
-
+  // ── Init ──
+  loadSession(); if (sessionToken) showApp(); else showAuth();
 })();

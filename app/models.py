@@ -22,6 +22,7 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    display_name = Column(String, nullable=False, default="User")  # Public name for sharing
     username_encrypted = Column(String, nullable=False)     # RSA-encrypted hex
     email_encrypted = Column(String, nullable=False)        # RSA-encrypted hex
     password_hash = Column(String, nullable=False)          # Scratch hash
@@ -55,10 +56,7 @@ class Vault(Base):
 
 class SharedFile(Base):
     """
-    Tracks file sharing between users.
-
-    The symmetric session key is re-encrypted with the
-    recipient's ECC public key.
+    Stores the final encrypted file for the recipient.
     """
     __tablename__ = "shared_files"
 
@@ -66,7 +64,21 @@ class SharedFile(Base):
     vault_id = Column(Integer, ForeignKey("vaults.id"), nullable=False)
     shared_by = Column(Integer, ForeignKey("users.id"), nullable=False)
     shared_with = Column(Integer, ForeignKey("users.id"), nullable=False)
-    encrypted_symmetric_key = Column(String, nullable=False)
+    filename_encrypted = Column(String, nullable=False)
+    encrypted_payload = Column(String, nullable=False)
+    encrypted_mac = Column(String, nullable=False)
     created_at = Column(String, nullable=False)
 
     vault = relationship("Vault", back_populates="shares")
+
+
+class ShareRequest(Base):
+    """Invitation to share — request first, encrypt after acceptance."""
+    __tablename__ = "share_requests"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    sender_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    receiver_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    status = Column(String, default="pending")  # pending | accepted | rejected
+    created_at = Column(String, nullable=False)
+

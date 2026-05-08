@@ -171,6 +171,14 @@
         <span class="material-icons-outlined">schedule</span>
         <span>Recent</span>
       </a>
+      <a class="sidebar-item" data-view="shared">
+        <span class="material-icons-outlined">people</span>
+        <span>Shared with me</span>
+      </a>
+      <a class="sidebar-item" data-view="sharing-center">
+        <span class="material-icons-outlined">share</span>
+        <span>Sharing Center</span>
+      </a>
       <a class="sidebar-item" data-view="encrypted">
         <span class="material-icons-outlined">enhanced_encryption</span>
         <span>Encrypted</span>
@@ -336,6 +344,30 @@
         </button>
       </div>
       <div class="modal-body" id="previewContent">
+      </div>
+    </div>
+  </div>
+
+  <!-- Share Modal -->
+  <div class="modal-backdrop" id="shareModal" style="display:none;">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Share File</h3>
+        <button class="btn-icon" id="closeShareModal">
+          <span class="material-icons-outlined">close</span>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="settings-section">
+          <label class="settings-label">Find User</label>
+          <div style="display:flex; gap:0.5rem;">
+            <input id="userSearchInput" type="text" class="settings-input" placeholder="Search by ID or Username..." />
+            <button class="btn-primary" id="userSearchBtn">Search</button>
+          </div>
+        </div>
+        <div id="userSearchResults" style="margin-top:1rem; max-height:200px; overflow:auto;">
+          <!-- Results will be injected here -->
+        </div>
       </div>
     </div>
   </div>

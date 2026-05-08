@@ -42,6 +42,7 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)):
     pw_hash = scratch_hash(body.password + salt)
     
     user = User(
+        display_name=body.username,
         username_encrypted=enc_username,
         email_encrypted=enc_email,
         password_hash=pw_hash,
