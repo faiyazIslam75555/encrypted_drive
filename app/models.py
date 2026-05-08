@@ -46,6 +46,7 @@ class Vault(Base):
     encrypted_payload = Column(String, nullable=False)       # Multi-chunk RSA/ECC string
     digital_signature = Column(String, nullable=False)       # ECC Signature JSON
     mac_hash = Column(String, nullable=False)                # Scratch Hash
+    file_size = Column(Integer, nullable=True, default=0)    # Original file size in bytes
     uploaded_at = Column(String, nullable=False)
 
     owner = relationship("User", back_populates="vaults")

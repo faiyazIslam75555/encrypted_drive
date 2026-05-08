@@ -11,287 +11,405 @@
 
   // ─── Persistence ───
   function saveSession() {
-    localStorage.setItem("vault_session", JSON.stringify({
-      token: sessionToken,
-      userId: currentUserId,
-      masterKey: eccPrivateKey
+    localStorage.setItem("drive_session", JSON.stringify({
+      token: sessionToken, userId: currentUserId, masterKey: eccPrivateKey
     }));
   }
-
   function loadSession() {
-    const saved = localStorage.getItem("vault_session");
-    if (saved) {
-      try {
-        const data = JSON.parse(saved);
-        sessionToken = data.token;
-        currentUserId = data.userId;
-        eccPrivateKey = data.masterKey;
-        
-        if (eccPrivateKey && $("#userEccPriv")) {
-          $("#userEccPriv").value = eccPrivateKey;
-        }
-        updateLoginStatus();
-        
-        // If we have a session, move to vault page automatically
-        if (sessionToken) {
-           $("#navVault")?.click();
-        }
-      } catch(e) { 
-        localStorage.removeItem("vault_session"); 
-      }
-    }
+    const s = localStorage.getItem("drive_session");
+    if (!s) return;
+    try {
+      const d = JSON.parse(s);
+      sessionToken = d.token; currentUserId = d.userId; eccPrivateKey = d.masterKey;
+      if (eccPrivateKey && $("#userEccPriv")) $("#userEccPriv").value = eccPrivateKey;
+    } catch { localStorage.removeItem("drive_session"); }
   }
 
-  function logout() {
-    sessionToken = null;
-    currentUserId = null;
-    eccPrivateKey = null;
-    localStorage.removeItem("vault_session");
-    updateLoginStatus();
-    $("#navAuth")?.click();
-    toast("Session Terminated", "error");
-  }
-
-  // ─── UI ───
+  // ─── Toast ───
   function toast(msg, type = "success") {
-    const el = $("#toast");
-    if (!el) return;
+    const el = $("#toast"); if (!el) return;
     el.className = `toast ${type} show`;
-    el.innerHTML = `<span>${type === "success" ? "⚡" : "⚠️"}</span> <span>${msg}</span>`;
-    setTimeout(() => el.classList.remove("show"), 4000);
+    el.textContent = msg;
+    setTimeout(() => el.classList.remove("show"), 3500);
   }
 
-  function updateLoginStatus() {
-    const dot = $(".status-dot");
-    const txt = $(".status-text");
-    const navV = $("#navVault");
-
-    if (sessionToken) {
-      if (dot) dot.style.background = "var(--success)";
-      if (txt) txt.textContent = `Node: ID-${currentUserId}`;
-      if (navV) navV.classList.remove("hidden");
-    } else {
-      if (dot) dot.style.background = "var(--danger)";
-      if (txt) txt.textContent = "Disconnected";
-      if (navV) navV.classList.add("hidden");
-    }
-  }
-
+  // ─── API Helper ───
   async function api(method, path, body, isFormData = false) {
     const headers = {};
     if (sessionToken) headers["Authorization"] = `Bearer ${sessionToken}`;
     if (!isFormData) headers["Content-Type"] = "application/json";
-
     try {
       const resp = await fetch(`${API}${path}`, {
-        method,
-        headers,
+        method, headers,
         body: isFormData ? body : (body ? JSON.stringify(body) : undefined),
       });
-
-      if (resp.status === 401) {
-        logout();
-        return { ok: false, data: { detail: "Session Expired" } };
-      }
-
-      const contentType = resp.headers.get("content-type") || "";
-      let data;
-      if (contentType.includes("application/json")) {
-        data = await resp.json();
-      } else {
-        data = { detail: await resp.text() };
-      }
+      if (resp.status === 401) { logout(); return { ok: false, data: { detail: "Session expired" } }; }
+      const ct = resp.headers.get("content-type") || "";
+      const data = ct.includes("json") ? await resp.json() : { detail: await resp.text() };
       return { ok: resp.ok, data };
-    } catch (err) {
-      return { ok: false, data: { detail: "Network Error" } };
-    }
+    } catch { return { ok: false, data: { detail: "Network Error" } }; }
   }
 
-  // ─── Navigation ───
-  $$(".nav-btn[data-page]").forEach((btn) => {
-    btn.addEventListener("click", (e) => {
-      e.preventDefault();
-      const page = btn.dataset.page;
-      
-      if (page === "vault" && !sessionToken) {
-        toast("Neural Authentication Required", "error");
-        return;
-      }
+  // ─── Auth UI ───
+  function showAuthOverlay() {
+    $("#authOverlay").style.display = "flex";
+    $("#driveApp").style.display = "none";
+  }
+  function showDriveApp() {
+    $("#authOverlay").style.display = "none";
+    $("#driveApp").style.display = "grid";
+    updateUserInfo();
+    checkKeyBanner();
+    refreshFiles();
+  }
+  function logout() {
+    sessionToken = null; currentUserId = null; eccPrivateKey = null;
+    localStorage.removeItem("drive_session");
+    showAuthOverlay();
+    toast("Signed out", "error");
+  }
 
-      $$(".nav-btn").forEach(b => b.classList.remove("active"));
-      btn.classList.add("active");
-      $$(".page").forEach(p => p.classList.remove("active"));
-      $(`#page${page.charAt(0).toUpperCase() + page.slice(1)}`).classList.add("active");
-      
-      if (page === "vault") refreshVaultList();
+  // Auth Tabs
+  $$(".auth-tab").forEach(tab => {
+    tab.addEventListener("click", () => {
+      $$(".auth-tab").forEach(t => t.classList.remove("active"));
+      tab.classList.add("active");
+      const target = tab.dataset.tab;
+      $$(".auth-form").forEach(f => f.style.display = "none");
+      const form = $(`[data-form="${target}"]`);
+      if (form) form.style.display = "flex";
+      $("#keyDisplay").style.display = "none";
     });
   });
 
-  // ─── Auth ───
+  // Register
   $("#registerForm")?.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const btn = $("#regSubmit");
-    if (btn) btn.disabled = true;
-
+    const btn = $("#regSubmit"); btn.disabled = true;
     const { ok, data } = await api("POST", "/register", {
       username: $("#regUsername").value,
       password: $("#regPassword").value,
       email: $("#regEmail").value
     });
-
-    if (btn) btn.disabled = false;
+    btn.disabled = false;
     if (!ok) return toast(data.detail || "Registration failed", "error");
-
-    toast("Master Key Generated!");
-    $("#eccPrivKeyOut").value = data.ecc_private_key;
-    $("#keyDisplay").classList.remove("hidden");
+    toast("Account created!");
     eccPrivateKey = data.ecc_private_key;
-    if ($("#userEccPriv")) $("#userEccPriv").value = eccPrivateKey;
-    saveSession();
+    $("#eccPrivKeyOut").value = eccPrivateKey;
+    $("#registerForm").style.display = "none";
+    $("#keyDisplay").style.display = "block";
   });
 
+  // Copy key
+  $("#copyKeyBtn")?.addEventListener("click", () => {
+    const key = $("#eccPrivKeyOut").value;
+    navigator.clipboard.writeText(key).then(() => toast("Key copied!"));
+  });
+
+  // Key saved -> go to login
+  $("#keySavedBtn")?.addEventListener("click", () => {
+    $("#keyDisplay").style.display = "none";
+    $("#tabLogin").click();
+  });
+
+  // Login Step 1
   $("#loginStep1Form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
+    const btn = $("#login1Submit"); btn.disabled = true;
     const { ok, data } = await api("POST", "/login/step1", {
-      email: $("#loginEmail").value,
-      password: $("#loginPassword").value
+      email: $("#loginEmail").value, password: $("#loginPassword").value
     });
-    if (!ok) return toast(data.detail, "error");
+    btn.disabled = false;
+    if (!ok) return toast(data.detail || "Invalid credentials", "error");
     currentUserId = data.user_id;
-    $("#loginStep1Form").classList.add("hidden");
-    $("#loginStep2Form").classList.remove("hidden");
-    toast("Phase 1 verified. Check OTP.");
+    $("#loginStep1Form").style.display = "none";
+    $("#loginStep2Form").style.display = "flex";
+    toast("Check console for OTP code");
   });
 
+  // Login Step 2
   $("#loginStep2Form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
+    const btn = $("#login2Submit"); btn.disabled = true;
     const { ok, data } = await api("POST", "/login/step2", {
-      user_id: currentUserId,
-      otp_code: $("#otpCode").value
+      user_id: currentUserId, otp_code: $("#otpCode").value
     });
-    if (!ok) return toast(data.detail, "error");
+    btn.disabled = false;
+    if (!ok) return toast(data.detail || "Invalid OTP", "error");
     sessionToken = data.token;
     saveSession();
-    toast("Access Granted");
-    updateLoginStatus();
-    $("#navVault")?.click();
+    toast("Welcome back!");
+    showDriveApp();
   });
 
-  // ─── Vault ───
-  $("#syncKeysBtn")?.addEventListener("click", (e) => {
-    e.preventDefault();
+  // ─── User Info ───
+  function updateUserInfo() {
+    const initial = "U";
+    const name = `User ${currentUserId || ""}`;
+    const email = `ID: ${currentUserId || "--"}`;
+    $("#userAvatar").textContent = initial;
+    $("#dropdownAvatar").textContent = initial;
+    $("#dropdownName").textContent = name;
+    $("#dropdownEmail").textContent = email;
+  }
+
+  // User menu toggle
+  $("#userAvatar")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const dd = $("#userDropdown");
+    dd.style.display = dd.style.display === "none" ? "block" : "none";
+  });
+  document.addEventListener("click", () => { if ($("#userDropdown")) $("#userDropdown").style.display = "none"; });
+  $("#logoutBtn")?.addEventListener("click", logout);
+
+  // ─── Key Banner ───
+  function checkKeyBanner() {
+    const banner = $("#keyBanner");
+    if (!banner) return;
+    banner.style.display = eccPrivateKey ? "none" : "flex";
+  }
+  $("#keyBannerBtn")?.addEventListener("click", () => openSettings());
+
+  // ─── Settings Modal ───
+  function openSettings() {
+    $("#settingsModal").style.display = "flex";
+    if (eccPrivateKey) $("#userEccPriv").value = eccPrivateKey;
+  }
+  $("#settingsBtn")?.addEventListener("click", openSettings);
+  $("#closeSettingsModal")?.addEventListener("click", () => { $("#settingsModal").style.display = "none"; });
+
+  $("#syncKeysBtn")?.addEventListener("click", () => {
     eccPrivateKey = $("#userEccPriv").value.trim();
-    if (eccPrivateKey) {
-      saveSession();
-      toast("Master Core Synchronized");
-    }
+    if (!eccPrivateKey) return toast("Please enter your key", "error");
+    saveSession();
+    checkKeyBanner();
+    toast("Key synced! Refreshing files...");
+    $("#settingsModal").style.display = "none";
+    refreshFiles();
   });
 
-  $("#secureResetBtn")?.addEventListener("click", async (e) => {
-    e.preventDefault();
-    if (!confirm("Permanently delete ALL encrypted data?")) return;
-    const { ok } = await api("POST", "/vault/reset", { ecc_private_key: $("#userEccPriv").value });
-    if (ok) {
-      toast("Vault Wiped");
-      refreshVaultList();
-    }
+  $("#secureResetBtn")?.addEventListener("click", async () => {
+    if (!confirm("Permanently delete ALL your encrypted files?")) return;
+    const { ok } = await api("POST", "/vault/reset");
+    if (ok) { toast("All files deleted"); refreshFiles(); }
+    else toast("Reset failed", "error");
   });
 
+  // ─── Upload Modal ───
+  function openUploadModal() {
+    if (!eccPrivateKey) { toast("Set your Master Key in Settings first", "error"); openSettings(); return; }
+    $("#uploadModal").style.display = "flex";
+    resetUploadForm();
+  }
+  function resetUploadForm() {
+    $("#fileInput").value = "";
+    $("#uploadDrop").style.display = "flex";
+    $("#uploadFileInfo").style.display = "none";
+    $("#uploadSubmit").disabled = true;
+  }
+
+  $("#uploadTrigger")?.addEventListener("click", openUploadModal);
+  $("#emptyUploadBtn")?.addEventListener("click", openUploadModal);
+  $("#closeUploadModal")?.addEventListener("click", () => { $("#uploadModal").style.display = "none"; });
+
+  // File selection
+  $("#uploadDrop")?.addEventListener("click", () => $("#fileInput").click());
+  $("#uploadDrop")?.addEventListener("dragover", (e) => { e.preventDefault(); e.currentTarget.classList.add("dragover"); });
+  $("#uploadDrop")?.addEventListener("dragleave", (e) => { e.currentTarget.classList.remove("dragover"); });
+  $("#uploadDrop")?.addEventListener("drop", (e) => {
+    e.preventDefault(); e.currentTarget.classList.remove("dragover");
+    if (e.dataTransfer.files.length) { $("#fileInput").files = e.dataTransfer.files; showSelectedFile(); }
+  });
+
+  $("#fileInput")?.addEventListener("change", showSelectedFile);
+  function showSelectedFile() {
+    const file = $("#fileInput").files[0];
+    if (!file) return;
+    $("#uploadDrop").style.display = "none";
+    $("#uploadFileInfo").style.display = "flex";
+    $("#uploadFileName").textContent = file.name;
+    $("#uploadFileSize").textContent = formatSize(file.size);
+    $("#uploadFileIcon").textContent = getFileIconName(file.name);
+    $("#uploadSubmit").disabled = false;
+  }
+  $("#clearFileBtn")?.addEventListener("click", resetUploadForm);
+
+  // Upload submit
   $("#uploadForm")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     const file = $("#fileInput").files[0];
-    if (!file) return toast("No file selected", "error");
-    
+    if (!file) return;
+    const btn = $("#uploadSubmit"); btn.disabled = true;
+    btn.innerHTML = '<span class="material-icons-outlined">hourglass_top</span> Encrypting...';
     const fd = new FormData();
     fd.append("file", file);
-    fd.append("ecc_private_key", $("#userEccPriv").value);
-    
-    toast("Applying Neural Encryption...");
+    fd.append("ecc_private_key", eccPrivateKey);
     const { ok } = await api("POST", "/vault/upload", fd, true);
+    btn.disabled = false;
+    btn.innerHTML = '<span class="material-icons-outlined">upload</span> Encrypt & Upload';
     if (ok) {
-      toast("Payload Secured");
-      refreshVaultList();
-    }
+      toast("File encrypted & uploaded!");
+      $("#uploadModal").style.display = "none";
+      refreshFiles();
+    } else { toast("Upload failed", "error"); }
   });
 
-  async function refreshVaultList() {
-    const { ok, data } = await api("GET", "/vault/list");
-    if (!ok) return;
-    const list = $("#vaultList");
+  // ─── File List ───
+  async function refreshFiles() {
+    const list = $("#fileList");
     if (!list) return;
-    list.innerHTML = data.entries.map(e => `
-      <div class="vault-item">
-        <span>Sequence ID: #${e.id}</span>
-        <button type="button" class="btn btn-secondary btn-small" onclick="window.retrieveFile(${e.id})">Decrypt</button>
-      </div>
-    `).join("");
+    const keyParam = eccPrivateKey ? `?ecc_private_key=${encodeURIComponent(eccPrivateKey)}` : "";
+    const { ok, data } = await api("GET", `/vault/list${keyParam}`);
+    if (!ok) return;
+
+    const entries = data.entries || [];
+    $("#storageText").textContent = `${entries.length} file${entries.length !== 1 ? "s" : ""} uploaded`;
+    $("#storageFill").style.width = Math.min(entries.length * 5, 100) + "%";
+
+    if (entries.length === 0) {
+      list.innerHTML = `
+        <div class="empty-state">
+          <span class="material-icons-outlined empty-icon">cloud_upload</span>
+          <h3>No files yet</h3>
+          <p>Upload your first file to get started</p>
+          <button class="btn-primary" onclick="document.getElementById('uploadTrigger').click()">
+            <span class="material-icons-outlined">upload_file</span> Upload File
+          </button>
+        </div>`;
+      return;
+    }
+
+    list.innerHTML = entries.map(f => {
+      const icon = getFileIconName(f.filename);
+      const iconClass = getFileIconClass(f.filename);
+      const date = formatDate(f.uploaded_at);
+      const size = formatSize(f.file_size || 0);
+      return `
+        <div class="file-item" data-id="${f.id}">
+          <div class="file-name">
+            <span class="material-icons-outlined ${iconClass}">${icon}</span>
+            <span>${escapeHtml(f.filename)}</span>
+          </div>
+          <span class="file-date">${date}</span>
+          <span class="file-size">${size}</span>
+          <div class="file-actions">
+            <button class="btn-icon" title="Download" onclick="event.stopPropagation(); window._downloadFile(${f.id})">
+              <span class="material-icons-outlined">download</span>
+            </button>
+            <button class="btn-icon" title="Delete" onclick="event.stopPropagation(); window._deleteFile(${f.id})">
+              <span class="material-icons-outlined">delete</span>
+            </button>
+          </div>
+        </div>`;
+    }).join("");
   }
 
-  // ─── Manual Retrieval Form ───
-  $("#downloadForm")?.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const id = $("#vaultId").value;
-    if (id) window.retrieveFile(id);
-  });
+  // ─── Download ───
+  window._downloadFile = async (id) => {
+    if (!eccPrivateKey) { toast("Set your Master Key first", "error"); openSettings(); return; }
+    toast("Decrypting file...");
+    const { ok, data } = await api("GET", `/vault/download/${id}?ecc_private_key=${encodeURIComponent(eccPrivateKey)}`);
+    if (!ok) { toast(data.detail || "Download failed", "error"); return; }
+    try {
+      const bytes = new Uint8Array(data.data_hex.match(/.{1,2}/g).map(b => parseInt(b, 16)));
+      const blob = new Blob([bytes]);
+      const url = URL.createObjectURL(blob);
+      const ext = (data.filename || "").split('.').pop().toLowerCase();
 
-  window.retrieveFile = async (id) => {
-    const keyInput = $("#userEccPriv");
-    const key = keyInput ? keyInput.value.trim() : eccPrivateKey;
-    
-    if (!key) return toast("Master Key Required for Decryption", "error");
-    
-    const previewEl = $("#downloadPreview");
-    toast("Initiating Neural Decryption Sequence...");
-    const { ok, data } = await api("GET", `/vault/download/${id}?ecc_private_key=${encodeURIComponent(key)}`);
-    
-    if (ok) {
-      toast("Reassembling Asymmetric Chunks...");
-      try {
-        const bytes = new Uint8Array(data.data_hex.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
-        const blob = new Blob([bytes]);
-        const url = URL.createObjectURL(blob);
-        
-        // ---- NEURAL PREVIEWER ----
-        const ext = data.filename.split('.').pop().toLowerCase();
-        previewEl.classList.remove("hidden");
-        previewEl.innerHTML = `
-          <div style="text-align:center;">
-            <p class="subtitle" style="margin-bottom:1rem;">Recovered: <strong>${data.filename}</strong></p>
-            ${['png','jpg','jpeg','gif'].includes(ext) ? `<img src="${url}" style="max-width:100%; border-radius:8px; border:1px solid var(--accent);" />` : ''}
-            ${['txt','md','js','py','json'].includes(ext) ? `<pre style="text-align:left; max-height:200px; overflow:auto; padding:1rem; background:#000; color:var(--success); border-radius:8px;">${new TextDecoder().decode(bytes)}</pre>` : ''}
-            <div style="margin-top:1.5rem;">
-               <a href="${url}" download="${data.filename}" class="btn btn-primary btn-small">Download ${data.filename}</a>
-            </div>
-          </div>
-        `;
-
-        toast("Neural Decryption Complete");
-      } catch (err) {
-        toast("Reassembly failed: Data corruption or invalid key", "error");
+      // Show preview modal
+      const previewEl = $("#previewContent");
+      $("#previewTitle").textContent = data.filename;
+      let html = "";
+      if (['png','jpg','jpeg','gif','webp','svg'].includes(ext)) {
+        html = `<img src="${url}" alt="${escapeHtml(data.filename)}" />`;
+      } else if (['txt','md','js','py','json','csv','html','css','xml','log'].includes(ext)) {
+        html = `<pre>${escapeHtml(new TextDecoder().decode(bytes))}</pre>`;
+      } else {
+        html = `<p style="text-align:center;color:var(--text-secondary);">Preview not available for this file type.</p>`;
       }
-    } else {
-      toast(data.detail || "Neural retrieval failed", "error");
-    }
+      html += `<div class="preview-download"><a href="${url}" download="${escapeHtml(data.filename)}" class="btn-primary"><span class="material-icons-outlined">download</span> Download ${escapeHtml(data.filename)}</a></div>`;
+      previewEl.innerHTML = html;
+      $("#previewModal").style.display = "flex";
+      toast("File decrypted!");
+    } catch { toast("Decryption failed", "error"); }
   };
 
-  // ─── File Handling ───
-  const fInput = $("#fileInput");
-  const fName = $("#fileName");
-  const uSubmit = $("#uploadSubmit");
+  $("#closePreviewModal")?.addEventListener("click", () => { $("#previewModal").style.display = "none"; });
 
-  fInput?.addEventListener("change", () => {
-    if (fInput.files.length) {
-      fName.textContent = fInput.files[0].name;
-      if (uSubmit) uSubmit.disabled = false;
-    }
+  // ─── Delete ───
+  window._deleteFile = async (id) => {
+    if (!confirm("Delete this file permanently?")) return;
+    const { ok } = await api("DELETE", `/vault/${id}`);
+    if (ok) { toast("File deleted"); refreshFiles(); }
+    else toast("Delete failed", "error");
+  };
+
+  // ─── Search ───
+  $("#searchInput")?.addEventListener("input", (e) => {
+    const query = e.target.value.toLowerCase();
+    $$(".file-item").forEach(item => {
+      const name = item.querySelector(".file-name")?.textContent.toLowerCase() || "";
+      item.style.display = name.includes(query) ? "" : "none";
+    });
   });
 
-  // ─── Initialization ───
-  $("#refreshVault")?.addEventListener("click", (e) => {
-    e.preventDefault();
-    refreshVaultList();
+  // ─── Refresh ───
+  $("#refreshBtn")?.addEventListener("click", () => refreshFiles());
+
+  // ─── Helpers ───
+  function getFileIconName(filename) {
+    if (!filename) return "description";
+    const ext = filename.split('.').pop().toLowerCase();
+    const map = {
+      png:"image",jpg:"image",jpeg:"image",gif:"image",webp:"image",svg:"image",
+      pdf:"picture_as_pdf",
+      doc:"description",docx:"description",txt:"description",md:"description",
+      xls:"table_chart",xlsx:"table_chart",csv:"table_chart",
+      mp3:"audiotrack",wav:"audiotrack",mp4:"movie",avi:"movie",
+      js:"code",py:"code",html:"code",css:"code",json:"code",xml:"code",
+      zip:"folder_zip",rar:"folder_zip","7z":"folder_zip",
+    };
+    return map[ext] || "description";
+  }
+  function getFileIconClass(filename) {
+    if (!filename) return "file-icon-generic";
+    const ext = filename.split('.').pop().toLowerCase();
+    if (["png","jpg","jpeg","gif","webp","svg"].includes(ext)) return "file-icon-img";
+    if (ext === "pdf") return "file-icon-pdf";
+    if (["doc","docx","txt","md"].includes(ext)) return "file-icon-doc";
+    if (["xls","xlsx","csv"].includes(ext)) return "file-icon-sheet";
+    if (["mp3","wav","mp4","avi"].includes(ext)) return "file-icon-media";
+    if (["js","py","html","css","json","xml"].includes(ext)) return "file-icon-code";
+    return "file-icon-generic";
+  }
+  function formatSize(bytes) {
+    if (!bytes || bytes === 0) return "--";
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
+    return (bytes / 1048576).toFixed(1) + " MB";
+  }
+  function formatDate(iso) {
+    if (!iso) return "--";
+    try {
+      const d = new Date(iso);
+      return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    } catch { return iso; }
+  }
+  function escapeHtml(str) {
+    if (!str) return "";
+    return str.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  }
+
+  // Close modals on backdrop click
+  $$(".modal-backdrop").forEach(backdrop => {
+    backdrop.addEventListener("click", (e) => {
+      if (e.target === backdrop) backdrop.style.display = "none";
+    });
   });
 
+  // ─── Init ───
   loadSession();
+  if (sessionToken) { showDriveApp(); }
+  else { showAuthOverlay(); }
 
 })();

@@ -3,238 +3,341 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Secure Vault | Neural Cryptography</title>
+  <title>SecureDrive — Encrypted Cloud Storage</title>
+  <meta name="description" content="Zero-knowledge encrypted cloud storage with RSA, ECC, and ECDSA cryptography." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Google+Sans:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Outlined" rel="stylesheet" />
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
 
-<!-- --- Background Elements --- -->
-<div class="bg-mesh"></div>
-<div class="bg-grid"></div>
-
-<!-- --- Toast Notifications --- -->
-<div id="toast" class="toast"></div>
-
-<!-- --- Navigation --- -->
-<nav class="navbar">
-  <a href="/" class="nav-brand">
-    <div class="brand-logo">🔐</div>
-    <span class="brand-text">Secure<span style="color:var(--accent)">Vault</span></span>
-  </a>
-  
-  <div class="nav-links" id="navLinks">
-    <button class="nav-btn active" data-page="auth" id="navAuth">Identity</button>
-    <button class="nav-btn hidden" data-page="vault" id="navVault">Storage</button>
-  </div>
-
-  <div class="nav-status" id="navStatus" style="display:flex; align-items:center; gap:0.5rem; font-size:0.75rem; color:var(--text-muted);">
-    <span class="status-dot" style="width:8px; height:8px; border-radius:50%; background:var(--danger);"></span>
-    <span class="status-text">Disconnected</span>
-  </div>
-</nav>
-
-<main class="container">
-
-  <!-- ================= AUTHENTICATION ================= -->
-  <section id="pageAuth" class="page active">
-    <div class="auth-wrapper">
-      
-      <!-- REGISTER -->
-      <div class="card" id="registerCard">
-        <div class="card-header">
-          <h2 class="gradient-text">Create Vault</h2>
-          <p class="subtitle">Generate your unique cryptographic identity</p>
-        </div>
-        
-        <form id="registerForm" class="form-stack">
-          <div class="input-group">
-            <label for="regUsername">Username</label>
-            <input id="regUsername" type="text" placeholder="Choose a name" required />
-          </div>
-          <div class="input-group">
-            <label for="regPassword">Master Password</label>
-            <input id="regPassword" type="password" placeholder="••••••••" required />
-          </div>
-          <div class="input-group">
-            <label for="regEmail">Identity Email</label>
-            <input id="regEmail" type="email" placeholder="email@secure.vault" required />
-          </div>
-          
-          <button type="submit" class="btn btn-primary" id="regSubmit">
-            <span>Initialize Identity</span>
-          </button>
-        </form>
-
-        <div id="keyDisplay" class="key-reveal hidden">
-          <div style="background:rgba(251,191,36,0.1); padding:0.75rem; border-radius:8px; margin-bottom:1rem; border:1px solid rgba(251,191,36,0.2);">
-            <p style="color:var(--warning); font-size:0.8rem; font-weight:600;">⚠️ Critical: Backup these keys. They are only shown once.</p>
-          </div>
-          
-          <div class="form-stack" style="gap:1rem;">
-            <div class="input-group">
-              <label>RSA Private Fragment</label>
-              <textarea id="rsaPrivKeyOut" readonly rows="3"></textarea>
-            </div>
-            <div class="input-group">
-              <label>ECC Private Scalar</label>
-              <textarea id="eccPrivKeyOut" readonly rows="1"></textarea>
-            </div>
-            <button class="btn btn-secondary btn-small btn-copy" data-target="rsaPrivKeyOut">Copy RSA Key</button>
-          </div>
-        </div>
+<!-- ─── Auth Pages ─── -->
+<div id="authOverlay" class="auth-overlay">
+  <div class="auth-container">
+    <div class="auth-brand">
+      <div class="auth-logo">
+        <span class="material-icons-outlined">encrypted</span>
       </div>
-
-      <!-- LOGIN -->
-      <div class="card" id="loginCard">
-        <div class="card-header">
-          <h2 class="gradient-text">Access Vault</h2>
-          <p class="subtitle">Multi-factor neural verification</p>
-        </div>
-
-        <form id="loginStep1Form" class="form-stack">
-          <div class="step-badge">Phase 1: Knowledge</div>
-          <div class="input-group">
-            <label for="loginEmail">Email Address</label>
-            <input id="loginEmail" type="email" placeholder="email@secure.vault" required />
-          </div>
-          <div class="input-group">
-            <label for="loginPassword">Master Password</label>
-            <input id="loginPassword" type="password" placeholder="••••••••" required />
-          </div>
-          <button type="submit" class="btn btn-primary" id="login1Submit">
-            <span>Verify Knowledge</span>
-          </button>
-        </form>
-
-        <form id="loginStep2Form" class="form-stack hidden">
-          <div class="step-badge" style="background:hsla(150, 80%, 50%, 0.1); color:var(--success);">Phase 2: OTP Receipt</div>
-          <div style="background:rgba(0,0,0,0.2); padding:1rem; border-radius:10px; margin-bottom:0.5rem; border:1px solid var(--border-glass);">
-            <p style="font-size:0.85rem; color:var(--text-muted);">Check system logs for <span style="color:var(--accent); font-family:monospace;">[DEV-OTP]</span></p>
-          </div>
-          <div class="input-group">
-            <label>6-Digit Verification Code</label>
-            <input id="otpCode" type="text" maxlength="6" placeholder="000 000" 
-                   style="text-align:center; font-size:1.5rem; letter-spacing:0.5rem; font-family:'JetBrains Mono';" required />
-          </div>
-          <button type="submit" class="btn btn-primary" id="login2Submit">
-            <span>Grant Access</span>
-          </button>
-        </form>
-      </div>
-
+      <h1>Secure<span class="accent">Drive</span></h1>
+      <p class="auth-tagline">Zero-knowledge encrypted cloud storage</p>
     </div>
-  </section>
 
-  <!-- ================= VAULT STORAGE ================= -->
-  <section id="pageVault" class="page">
-    <div class="vault-wrapper">
+    <!-- Tab Toggle -->
+    <div class="auth-tabs">
+      <button class="auth-tab active" data-tab="login" id="tabLogin">Sign In</button>
+      <button class="auth-tab" data-tab="register" id="tabRegister">Create Account</button>
+    </div>
 
-      <!-- KEY CONFIG -->
-      <div class="card full-width" id="keysCard">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
+    <!-- Login Form -->
+    <form id="loginStep1Form" class="auth-form active" data-form="login">
+      <div class="form-field">
+        <span class="material-icons-outlined field-icon">email</span>
+        <input id="loginEmail" type="email" placeholder="Email address" required />
+      </div>
+      <div class="form-field">
+        <span class="material-icons-outlined field-icon">lock</span>
+        <input id="loginPassword" type="password" placeholder="Password" required />
+      </div>
+      <button type="submit" class="btn-auth" id="login1Submit">
+        <span class="material-icons-outlined">login</span>
+        Sign In
+      </button>
+    </form>
+
+    <!-- OTP Form -->
+    <form id="loginStep2Form" class="auth-form" data-form="otp" style="display:none;">
+      <div class="otp-notice">
+        <span class="material-icons-outlined">sms</span>
+        <p>Check your server console for the <strong>[DEV-OTP]</strong> code</p>
+      </div>
+      <div class="form-field">
+        <span class="material-icons-outlined field-icon">pin</span>
+        <input id="otpCode" type="text" maxlength="6" placeholder="6-digit OTP code" 
+               style="text-align:center; letter-spacing:0.5rem; font-size:1.3rem;" required />
+      </div>
+      <button type="submit" class="btn-auth" id="login2Submit">
+        <span class="material-icons-outlined">verified_user</span>
+        Verify OTP
+      </button>
+    </form>
+
+    <!-- Register Form -->
+    <form id="registerForm" class="auth-form" data-form="register" style="display:none;">
+      <div class="form-field">
+        <span class="material-icons-outlined field-icon">person</span>
+        <input id="regUsername" type="text" placeholder="Username" required />
+      </div>
+      <div class="form-field">
+        <span class="material-icons-outlined field-icon">email</span>
+        <input id="regEmail" type="email" placeholder="Email address" required />
+      </div>
+      <div class="form-field">
+        <span class="material-icons-outlined field-icon">lock</span>
+        <input id="regPassword" type="password" placeholder="Password" required />
+      </div>
+      <button type="submit" class="btn-auth" id="regSubmit">
+        <span class="material-icons-outlined">person_add</span>
+        Create Account
+      </button>
+    </form>
+
+    <!-- Key Display (after registration) -->
+    <div id="keyDisplay" class="key-display" style="display:none;">
+      <div class="key-warning">
+        <span class="material-icons-outlined">warning</span>
+        <div>
+          <strong>Save your Master Key!</strong>
+          <p>This is the ONLY way to access your encrypted files. It cannot be recovered.</p>
+        </div>
+      </div>
+      <div class="key-box">
+        <label>ECC Private Key (Master Key)</label>
+        <div class="key-value-row">
+          <textarea id="eccPrivKeyOut" readonly rows="2"></textarea>
+          <button type="button" class="btn-icon" id="copyKeyBtn" title="Copy key">
+            <span class="material-icons-outlined">content_copy</span>
+          </button>
+        </div>
+      </div>
+      <button type="button" class="btn-auth" id="keySavedBtn">
+        <span class="material-icons-outlined">check_circle</span>
+        I've Saved My Key — Continue to Sign In
+      </button>
+    </div>
+
+    <div class="auth-footer">
+      <span class="material-icons-outlined" style="font-size:14px;">shield</span>
+      End-to-end encrypted with RSA + ECC + ECDSA
+    </div>
+  </div>
+</div>
+
+<!-- ─── Main App (Drive UI) ─── -->
+<div id="driveApp" class="drive-app" style="display:none;">
+
+  <!-- Header -->
+  <header class="drive-header" id="driveHeader">
+    <div class="header-left">
+      <div class="header-logo">
+        <span class="material-icons-outlined">encrypted</span>
+      </div>
+      <h1 class="header-title">Secure<span class="accent">Drive</span></h1>
+    </div>
+    
+    <div class="header-search">
+      <span class="material-icons-outlined">search</span>
+      <input type="text" id="searchInput" placeholder="Search in Drive" />
+    </div>
+
+    <div class="header-right">
+      <button class="btn-icon header-icon" id="settingsBtn" title="Encryption Settings">
+        <span class="material-icons-outlined">settings</span>
+      </button>
+      <div class="user-menu" id="userMenu">
+        <div class="user-avatar" id="userAvatar">U</div>
+        <div class="user-dropdown" id="userDropdown" style="display:none;">
+          <div class="dropdown-header">
+            <div class="dropdown-avatar" id="dropdownAvatar">U</div>
+            <div>
+              <div class="dropdown-name" id="dropdownName">User</div>
+              <div class="dropdown-email" id="dropdownEmail">ID: --</div>
+            </div>
+          </div>
+          <div class="dropdown-divider"></div>
+          <button class="dropdown-item" id="logoutBtn">
+            <span class="material-icons-outlined">logout</span>
+            Sign out
+          </button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Sidebar -->
+  <aside class="drive-sidebar" id="driveSidebar">
+    <button class="btn-upload" id="uploadTrigger">
+      <span class="material-icons-outlined">add</span>
+      <span>New</span>
+    </button>
+
+    <nav class="sidebar-nav">
+      <a class="sidebar-item active" data-view="my-drive">
+        <span class="material-icons-outlined">folder</span>
+        <span>My Drive</span>
+      </a>
+      <a class="sidebar-item" data-view="recent">
+        <span class="material-icons-outlined">schedule</span>
+        <span>Recent</span>
+      </a>
+      <a class="sidebar-item" data-view="encrypted">
+        <span class="material-icons-outlined">enhanced_encryption</span>
+        <span>Encrypted</span>
+      </a>
+    </nav>
+
+    <div class="sidebar-divider"></div>
+
+    <div class="storage-info">
+      <div class="storage-bar">
+        <div class="storage-fill" id="storageFill" style="width:0%"></div>
+      </div>
+      <p class="storage-text" id="storageText">0 files uploaded</p>
+    </div>
+
+    <div class="sidebar-crypto">
+      <div class="crypto-badge">
+        <span class="material-icons-outlined">shield</span>
+        <span>RSA + ECC + ECDSA</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main Content -->
+  <main class="drive-main" id="driveMain">
+    <!-- Toolbar -->
+    <div class="drive-toolbar">
+      <h2 class="toolbar-title" id="viewTitle">My Drive</h2>
+      <div class="toolbar-actions">
+        <button class="btn-icon" id="refreshBtn" title="Refresh">
+          <span class="material-icons-outlined">refresh</span>
+        </button>
+        <button class="btn-icon" id="viewGridBtn" title="Grid view">
+          <span class="material-icons-outlined">grid_view</span>
+        </button>
+        <button class="btn-icon active" id="viewListBtn" title="List view">
+          <span class="material-icons-outlined">view_list</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Key Required Banner -->
+    <div class="key-banner" id="keyBanner" style="display:none;">
+      <span class="material-icons-outlined">vpn_key</span>
+      <div>
+        <strong>Master key required</strong>
+        <p>Enter your ECC private key in Settings to decrypt file names and download files.</p>
+      </div>
+      <button class="btn-small" id="keyBannerBtn">Enter Key</button>
+    </div>
+
+    <!-- File List Header -->
+    <div class="file-list-header" id="fileListHeader">
+      <span class="fh-name">Name</span>
+      <span class="fh-date">Modified</span>
+      <span class="fh-size">File size</span>
+      <span class="fh-actions"></span>
+    </div>
+
+    <!-- File List -->
+    <div class="file-list" id="fileList">
+      <div class="empty-state" id="emptyState">
+        <span class="material-icons-outlined empty-icon">cloud_upload</span>
+        <h3>No files yet</h3>
+        <p>Upload your first file to get started</p>
+        <button class="btn-primary" id="emptyUploadBtn">
+          <span class="material-icons-outlined">upload_file</span>
+          Upload File
+        </button>
+      </div>
+    </div>
+
+    <!-- Loading -->
+    <div class="loading-overlay" id="loadingOverlay" style="display:none;">
+      <div class="spinner"></div>
+      <p id="loadingText">Loading...</p>
+    </div>
+  </main>
+
+  <!-- Upload Modal -->
+  <div class="modal-backdrop" id="uploadModal" style="display:none;">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Upload File</h3>
+        <button class="btn-icon" id="closeUploadModal">
+          <span class="material-icons-outlined">close</span>
+        </button>
+      </div>
+      <form id="uploadForm" class="modal-body">
+        <div class="upload-drop" id="uploadDrop">
+          <span class="material-icons-outlined upload-drop-icon">cloud_upload</span>
+          <p class="upload-drop-text">Drag & drop a file here</p>
+          <p class="upload-drop-sub">or click to browse</p>
+          <input type="file" id="fileInput" class="file-input-hidden" />
+        </div>
+        <div class="upload-file-info" id="uploadFileInfo" style="display:none;">
+          <span class="material-icons-outlined" id="uploadFileIcon">description</span>
           <div>
-            <h2 class="gradient-text">Neural Core Keys</h2>
-            <p class="subtitle" id="keysStatus">Identity verification required</p>
+            <p class="upload-filename" id="uploadFileName">-</p>
+            <p class="upload-filesize" id="uploadFileSize">-</p>
           </div>
-          <button class="btn btn-secondary btn-small" id="toggleKeysBtn">Configure Core</button>
-        </div>
-        
-        <div class="hidden" id="keysInner" style="margin-top:2rem;">
-          <div style="display:grid; grid-template-columns:1fr; gap:1.5rem;">
-            <div class="input-group">
-              <label>Master ECC Private Key (Reconstruction Secret)</label>
-              <input id="userEccPriv" type="password" placeholder="0x..." />
-              <p class="subtitle" style="font-size:0.7rem; margin-top:0.5rem;">This key is never stored on our servers. It is used to locally reconstruct your RSA fragments.</p>
-            </div>
-            <div style="display:flex; gap:1rem;">
-              <button class="btn btn-secondary btn-small" id="syncKeysBtn">Synchronize Core</button>
-              <button class="btn btn-danger btn-small" id="secureResetBtn" style="background:rgba(239,68,68,0.1); border:1px solid var(--danger); color:var(--danger);">Secure Reset</button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- UPLOAD -->
-      <div class="card">
-        <div class="card-header">
-          <h2 class="gradient-text">Ingest Payload</h2>
-          <p class="subtitle">SPN-CBC + RSA-256 + ECDSA-256 pipeline</p>
-        </div>
-        
-        <form id="uploadForm" class="form-stack">
-          <div class="file-drop" id="fileDrop">
-            <input type="file" id="fileInput" class="file-input" />
-            <span class="file-icon">⚡</span>
-            <p style="font-weight:600;">Drag & Drop Payload</p>
-            <p class="subtitle" id="fileName">Ready for encryption</p>
-          </div>
-          <button type="submit" class="btn btn-primary" id="uploadSubmit" disabled>
-            <span>Encrypt & Secure</span>
+          <button type="button" class="btn-icon" id="clearFileBtn">
+            <span class="material-icons-outlined">close</span>
           </button>
-        </form>
-        <div id="uploadResult" class="hidden" style="margin-top:1.5rem; font-family:'JetBrains Mono'; font-size:0.8rem; color:var(--success);"></div>
-      </div>
-
-      <!-- DOWNLOAD -->
-      <div class="card">
-        <div class="card-header">
-          <h2 class="gradient-text">Retrieve Payload</h2>
-          <p class="subtitle">Signature validation & asymmetric decryption</p>
         </div>
-        
-        <form id="downloadForm" class="form-stack">
-          <div class="input-group">
-            <label>Vault Sequence ID</label>
-            <input id="vaultId" type="number" placeholder="0" required />
-          </div>
-          <button type="submit" class="btn btn-primary" id="downloadSubmit">
-            <span>Decrypt & Reclaim</span>
-          </button>
-        </form>
-        
-        <div id="downloadPreview" class="hidden" style="margin-top:2rem; padding:1.5rem; background:rgba(0,0,0,0.3); border-radius:12px; border:1px solid var(--border-glass);"></div>
-      </div>
-
-      <!-- DIRECTORY -->
-      <div class="card full-width">
-        <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
-          <h2 class="gradient-text">Vault Directory</h2>
-          <button class="btn btn-secondary btn-small" id="refreshVault">Sync</button>
+        <div class="upload-encrypt-info">
+          <span class="material-icons-outlined">lock</span>
+          <span>File will be encrypted with RSA + ECC before upload</span>
         </div>
-        <div id="vaultList" class="vault-list">
-          <p class="subtitle" style="text-align:center; padding:2rem;">Initialize identity to browse directory</p>
-        </div>
-      </div>
-
-    </div>
-  </section>
-
-</main>
-
-<footer class="pipeline-footer">
-  <div class="pipeline">
-    <div class="pipe-step">
-      <div class="pipe-num">1</div>
-      <span>SPN-CBC (AES-lite)</span>
-    </div>
-    <div class="pipe-arrow">/</div>
-    <div class="pipe-step">
-      <div class="pipe-num">2</div>
-      <span>RSA-OAEP Wrap</span>
-    </div>
-    <div class="pipe-arrow">/</div>
-    <div class="pipe-step">
-      <div class="pipe-num">3</div>
-      <span>ECDSA-P256 Sign</span>
+        <button type="submit" class="btn-primary upload-submit" id="uploadSubmit" disabled>
+          <span class="material-icons-outlined">upload</span>
+          Encrypt & Upload
+        </button>
+      </form>
     </div>
   </div>
-  <p style="margin-top:2rem; color:var(--text-dim); font-size:0.8rem; font-family:'JetBrains Mono';">© 2026 NeuralVault Systems. Academic Grade Cryptography.</p>
-</footer>
+
+  <!-- Settings Modal -->
+  <div class="modal-backdrop" id="settingsModal" style="display:none;">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Encryption Settings</h3>
+        <button class="btn-icon" id="closeSettingsModal">
+          <span class="material-icons-outlined">close</span>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="settings-section">
+          <label class="settings-label">
+            <span class="material-icons-outlined">vpn_key</span>
+            Master ECC Private Key
+          </label>
+          <p class="settings-desc">This key is never stored on the server. It's used locally to derive your RSA keys for encryption/decryption.</p>
+          <input id="userEccPriv" type="password" class="settings-input" placeholder="0x..." />
+        </div>
+        <div class="settings-actions">
+          <button class="btn-primary" id="syncKeysBtn">
+            <span class="material-icons-outlined">sync</span>
+            Save & Sync Key
+          </button>
+          <button class="btn-danger" id="secureResetBtn">
+            <span class="material-icons-outlined">delete_forever</span>
+            Delete All Files
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- File Preview Modal -->
+  <div class="modal-backdrop" id="previewModal" style="display:none;">
+    <div class="modal modal-wide">
+      <div class="modal-header">
+        <h3 id="previewTitle">File Preview</h3>
+        <button class="btn-icon" id="closePreviewModal">
+          <span class="material-icons-outlined">close</span>
+        </button>
+      </div>
+      <div class="modal-body" id="previewContent">
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast" class="toast"></div>
 
 <script src="/static/app.js"></script>
 </body>
 </html>
-
