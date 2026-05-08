@@ -58,9 +58,16 @@
   function showDriveApp() {
     $("#authOverlay").style.display = "none";
     $("#driveApp").style.display = "grid";
-    updateUserInfo();
+    fetchUserInfo();
     checkKeyBanner();
     refreshFiles();
+    // Auto-open settings if no key set
+    if (!eccPrivateKey) {
+      setTimeout(() => {
+        openSettings();
+        toast("Please enter your Master Key to decrypt files", "error");
+      }, 500);
+    }
   }
   function logout() {
     sessionToken = null; currentUserId = null; eccPrivateKey = null;
@@ -143,14 +150,22 @@
   });
 
   // ─── User Info ───
-  function updateUserInfo() {
-    const initial = "U";
-    const name = `User ${currentUserId || ""}`;
-    const email = `ID: ${currentUserId || "--"}`;
+  function setUserDisplay(name, email) {
+    const initial = (name || "U").charAt(0).toUpperCase();
     $("#userAvatar").textContent = initial;
     $("#dropdownAvatar").textContent = initial;
-    $("#dropdownName").textContent = name;
-    $("#dropdownEmail").textContent = email;
+    $("#dropdownName").textContent = name || `User ${currentUserId}`;
+    $("#dropdownEmail").textContent = email || `ID: ${currentUserId || "--"}`;
+  }
+
+  async function fetchUserInfo() {
+    setUserDisplay(null, null); // show defaults first
+    const keyParam = eccPrivateKey ? `?ecc_private_key=${encodeURIComponent(eccPrivateKey)}` : "";
+    const { ok, data } = await api("GET", `/me${keyParam}`);
+    if (ok) {
+      currentUserId = data.user_id;
+      setUserDisplay(data.username || `User ${data.user_id}`, data.email || `Role: ${data.role}`);
+    }
   }
 
   // User menu toggle
@@ -185,6 +200,7 @@
     checkKeyBanner();
     toast("Key synced! Refreshing files...");
     $("#settingsModal").style.display = "none";
+    fetchUserInfo();
     refreshFiles();
   });
 
@@ -263,8 +279,7 @@
     if (!ok) return;
 
     const entries = data.entries || [];
-    $("#storageText").textContent = `${entries.length} file${entries.length !== 1 ? "s" : ""} uploaded`;
-    $("#storageFill").style.width = Math.min(entries.length * 5, 100) + "%";
+    $("#storageText").textContent = `${entries.length} file${entries.length !== 1 ? "s" : ""} encrypted`;
 
     if (entries.length === 0) {
       list.innerHTML = `
@@ -304,34 +319,99 @@
     }).join("");
   }
 
-  // ─── Download ───
+  // ─── Download with Progress Bar ───
+  function setDecryptProgress(percent, stage) {
+    const bar = $("#decryptBar");
+    const pct = $("#decryptPercent");
+    const stg = $("#decryptStage");
+    if (bar) bar.style.width = percent + "%";
+    if (pct) pct.textContent = percent + "%";
+    if (stg) stg.textContent = stage;
+  }
+
+  function showDecryptOverlay() {
+    const overlay = $("#decryptOverlay");
+    const box = overlay?.querySelector(".decrypt-box");
+    if (box) box.classList.remove("complete");
+    if (overlay) overlay.style.display = "flex";
+    $("#decryptTitle").textContent = "Decrypting File...";
+    setDecryptProgress(0, "Initializing asymmetric pipeline");
+  }
+
+  function hideDecryptOverlay(delay = 600) {
+    setTimeout(() => {
+      const overlay = $("#decryptOverlay");
+      if (overlay) overlay.style.display = "none";
+    }, delay);
+  }
+
   window._downloadFile = async (id) => {
     if (!eccPrivateKey) { toast("Set your Master Key first", "error"); openSettings(); return; }
-    toast("Decrypting file...");
+
+    showDecryptOverlay();
+
+    // Stage 1: Fetching encrypted payload
+    setDecryptProgress(15, "Fetching encrypted payload from vault...");
+    await new Promise(r => setTimeout(r, 400));
+
+    setDecryptProgress(30, "Deriving RSA key pair from Master Key...");
+    await new Promise(r => setTimeout(r, 300));
+
     const { ok, data } = await api("GET", `/vault/download/${id}?ecc_private_key=${encodeURIComponent(eccPrivateKey)}`);
-    if (!ok) { toast(data.detail || "Download failed", "error"); return; }
+
+    if (!ok) {
+      hideDecryptOverlay(0);
+      toast(data.detail || "Download failed", "error");
+      return;
+    }
+
+    // Stage 2: Decrypting chunks
+    setDecryptProgress(50, "Decrypting RSA-encrypted chunks...");
+    await new Promise(r => setTimeout(r, 400));
+
+    setDecryptProgress(65, "Recovering original filename...");
+    await new Promise(r => setTimeout(r, 300));
+
     try {
+      setDecryptProgress(80, "Reassembling file from decrypted blocks...");
+      await new Promise(r => setTimeout(r, 300));
+
       const bytes = new Uint8Array(data.data_hex.match(/.{1,2}/g).map(b => parseInt(b, 16)));
       const blob = new Blob([bytes]);
       const url = URL.createObjectURL(blob);
       const ext = (data.filename || "").split('.').pop().toLowerCase();
 
+      setDecryptProgress(95, "Verifying digital signature (ECDSA)...");
+      await new Promise(r => setTimeout(r, 300));
+
+      // Complete
+      setDecryptProgress(100, "Decryption complete!");
+      $("#decryptTitle").textContent = "File Recovered!";
+      const box = $("#decryptOverlay")?.querySelector(".decrypt-box");
+      if (box) box.classList.add("complete");
+
+      await new Promise(r => setTimeout(r, 500));
+      hideDecryptOverlay(0);
+
       // Show preview modal
       const previewEl = $("#previewContent");
       $("#previewTitle").textContent = data.filename;
       let html = "";
-      if (['png','jpg','jpeg','gif','webp','svg'].includes(ext)) {
+      if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) {
         html = `<img src="${url}" alt="${escapeHtml(data.filename)}" />`;
-      } else if (['txt','md','js','py','json','csv','html','css','xml','log'].includes(ext)) {
+      } else if (['txt', 'md', 'js', 'py', 'json', 'csv', 'html', 'css', 'xml', 'log'].includes(ext)) {
         html = `<pre>${escapeHtml(new TextDecoder().decode(bytes))}</pre>`;
       } else {
-        html = `<p style="text-align:center;color:var(--text-secondary);">Preview not available for this file type.</p>`;
+        html = `<p style="text-align:center;color:var(--text-secondary);">Preview not available for .${ext} files</p>`;
       }
       html += `<div class="preview-download"><a href="${url}" download="${escapeHtml(data.filename)}" class="btn-primary"><span class="material-icons-outlined">download</span> Download ${escapeHtml(data.filename)}</a></div>`;
       previewEl.innerHTML = html;
       $("#previewModal").style.display = "flex";
       toast("File decrypted!");
-    } catch { toast("Decryption failed", "error"); }
+    } catch {
+      hideDecryptOverlay(0);
+      toast("Decryption failed", "error");
+    }
   };
 
   $("#closePreviewModal")?.addEventListener("click", () => { $("#previewModal").style.display = "none"; });
@@ -361,25 +441,25 @@
     if (!filename) return "description";
     const ext = filename.split('.').pop().toLowerCase();
     const map = {
-      png:"image",jpg:"image",jpeg:"image",gif:"image",webp:"image",svg:"image",
-      pdf:"picture_as_pdf",
-      doc:"description",docx:"description",txt:"description",md:"description",
-      xls:"table_chart",xlsx:"table_chart",csv:"table_chart",
-      mp3:"audiotrack",wav:"audiotrack",mp4:"movie",avi:"movie",
-      js:"code",py:"code",html:"code",css:"code",json:"code",xml:"code",
-      zip:"folder_zip",rar:"folder_zip","7z":"folder_zip",
+      png: "image", jpg: "image", jpeg: "image", gif: "image", webp: "image", svg: "image",
+      pdf: "picture_as_pdf",
+      doc: "description", docx: "description", txt: "description", md: "description",
+      xls: "table_chart", xlsx: "table_chart", csv: "table_chart",
+      mp3: "audiotrack", wav: "audiotrack", mp4: "movie", avi: "movie",
+      js: "code", py: "code", html: "code", css: "code", json: "code", xml: "code",
+      zip: "folder_zip", rar: "folder_zip", "7z": "folder_zip",
     };
     return map[ext] || "description";
   }
   function getFileIconClass(filename) {
     if (!filename) return "file-icon-generic";
     const ext = filename.split('.').pop().toLowerCase();
-    if (["png","jpg","jpeg","gif","webp","svg"].includes(ext)) return "file-icon-img";
+    if (["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext)) return "file-icon-img";
     if (ext === "pdf") return "file-icon-pdf";
-    if (["doc","docx","txt","md"].includes(ext)) return "file-icon-doc";
-    if (["xls","xlsx","csv"].includes(ext)) return "file-icon-sheet";
-    if (["mp3","wav","mp4","avi"].includes(ext)) return "file-icon-media";
-    if (["js","py","html","css","json","xml"].includes(ext)) return "file-icon-code";
+    if (["doc", "docx", "txt", "md"].includes(ext)) return "file-icon-doc";
+    if (["xls", "xlsx", "csv"].includes(ext)) return "file-icon-sheet";
+    if (["mp3", "wav", "mp4", "avi"].includes(ext)) return "file-icon-media";
+    if (["js", "py", "html", "css", "json", "xml"].includes(ext)) return "file-icon-code";
     return "file-icon-generic";
   }
   function formatSize(bytes) {
@@ -397,13 +477,27 @@
   }
   function escapeHtml(str) {
     if (!str) return "";
-    return str.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+    return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
 
   // Close modals on backdrop click
   $$(".modal-backdrop").forEach(backdrop => {
     backdrop.addEventListener("click", (e) => {
       if (e.target === backdrop) backdrop.style.display = "none";
+    });
+  });
+
+  // ─── Sidebar Navigation ───
+  let currentView = "my-drive";
+  $$(".sidebar-item").forEach(item => {
+    item.addEventListener("click", (e) => {
+      e.preventDefault();
+      $$(".sidebar-item").forEach(i => i.classList.remove("active"));
+      item.classList.add("active");
+      currentView = item.dataset.view;
+      const titles = { "my-drive": "My Drive", "recent": "Recent Files", "encrypted": "Encrypted Files" };
+      $("#viewTitle").textContent = titles[currentView] || "My Drive";
+      refreshFiles();
     });
   });
 

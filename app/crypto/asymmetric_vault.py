@@ -16,29 +16,34 @@ def encrypt_file_asymmetric(file_bytes, rsa_pub_key):
     """
     Encrypts file bytes using RSA chunks. 
     Strictly asymmetric (no AES/Symmetric ciphers used).
+    
+    Each chunk is prepended with a 0x01 marker byte before RSA encryption.
+    This prevents data loss when chunks contain leading zero bytes
+    (common in binary formats like PNG, JPEG, etc.).
     """
     encrypted_chunks = []
-    # Process in small chunks because RSA has limits
     for i in range(0, len(file_bytes), CHUNK_SIZE):
         chunk = file_bytes[i:i+CHUNK_SIZE]
-        m = int.from_bytes(chunk, 'big')
+        # Prepend marker byte to preserve leading zeros
+        padded = b'\x01' + chunk
+        m = int.from_bytes(padded, 'big')
         c = rsa_encrypt(m, rsa_pub_key)
         encrypted_chunks.append(str(c))
     
     return "|".join(encrypted_chunks)
 
 def decrypt_file_asymmetric(encrypted_str, rsa_priv_key):
-    """Decrypts RSA-chunked data."""
+    """Decrypts RSA-chunked data, stripping the marker byte from each chunk."""
     chunks = encrypted_str.split("|")
     decrypted_bytes = bytearray()
     
     for c_str in chunks:
         c = int(c_str)
         m = rsa_decrypt(c, rsa_priv_key)
-        # Convert back to bytes. Assume original chunk was CHUNK_SIZE or less.
-        # We need to be careful with byte lengths.
+        # Convert back to bytes — the first byte is always the 0x01 marker
         b = m.to_bytes((m.bit_length() + 7) // 8, 'big')
-        decrypted_bytes.extend(b)
+        # Strip the marker byte to recover original chunk
+        decrypted_bytes.extend(b[1:])
         
     return bytes(decrypted_bytes)
 

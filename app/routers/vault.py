@@ -18,13 +18,25 @@ router = APIRouter(tags=["Hybrid Vault Service (Role 3)"])
 # ─── User Profile ───
 @router.get("/me")
 def get_profile(
+    ecc_private_key: str = None,
     current_user: User = Depends(get_current_user),
 ):
-    return {
+    result = {
         "user_id": current_user.id,
         "role": current_user.role,
         "created_at": current_user.created_at,
     }
+    if ecc_private_key:
+        try:
+            keys = derive_full_key_package(ecc_private_key)
+            from app.crypto.rsa import rsa_decrypt
+            uname_int = rsa_decrypt(int(current_user.username_encrypted, 16), keys["rsa_priv"])
+            result["username"] = uname_int.to_bytes((uname_int.bit_length() + 7) // 8, 'big').decode('utf-8')
+            email_int = rsa_decrypt(int(current_user.email_encrypted, 16), keys["rsa_priv"])
+            result["email"] = email_int.to_bytes((email_int.bit_length() + 7) // 8, 'big').decode('utf-8')
+        except Exception:
+            pass
+    return result
 
 # ─── Upload ───
 @router.post("/vault/upload")

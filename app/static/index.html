@@ -180,10 +180,7 @@
     <div class="sidebar-divider"></div>
 
     <div class="storage-info">
-      <div class="storage-bar">
-        <div class="storage-fill" id="storageFill" style="width:0%"></div>
-      </div>
-      <p class="storage-text" id="storageText">0 files uploaded</p>
+      <p class="storage-text" id="storageText">0 files encrypted</p>
     </div>
 
     <div class="sidebar-crypto">
@@ -243,10 +240,19 @@
       </div>
     </div>
 
-    <!-- Loading -->
-    <div class="loading-overlay" id="loadingOverlay" style="display:none;">
-      <div class="spinner"></div>
-      <p id="loadingText">Loading...</p>
+    <!-- Decryption Progress Overlay -->
+    <div class="decrypt-overlay" id="decryptOverlay" style="display:none;">
+      <div class="decrypt-box">
+        <div class="decrypt-icon">
+          <span class="material-icons-outlined decrypt-spin">enhanced_encryption</span>
+        </div>
+        <h3 class="decrypt-title" id="decryptTitle">Decrypting File...</h3>
+        <p class="decrypt-stage" id="decryptStage">Initializing asymmetric pipeline</p>
+        <div class="decrypt-progress-track">
+          <div class="decrypt-progress-bar" id="decryptBar" style="width:0%"></div>
+        </div>
+        <p class="decrypt-percent" id="decryptPercent">0%</p>
+      </div>
     </div>
   </main>
 
