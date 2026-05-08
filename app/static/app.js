@@ -56,15 +56,30 @@
 
   $("#loginStep1Form")?.addEventListener("submit", async e => {
     e.preventDefault();
-    const { ok, data } = await api("POST", "/login/step1", { email: $("#loginEmail").value, password: $("#loginPassword").value });
+    const btn = $("#login1Submit");
+    btn.disabled = true; btn.textContent = "Sending Code...";
+    
+    const { ok, data } = await api("POST", "/login/step1", { 
+      email: $("#loginEmail").value, 
+      password: $("#loginPassword").value,
+      ecc_private_key: $("#loginMasterKey").value
+    });
+    
+    btn.disabled = false; btn.innerHTML = '<span class="material-icons-outlined">login</span> Continue to 2FA';
+    
     if (!ok) return toast(data.detail || "Failed", "error");
     currentUserId = data.user_id; $("#loginStep1Form").style.display = "none"; $("#loginStep2Form").style.display = "flex";
   });
   $("#loginStep2Form")?.addEventListener("submit", async e => {
     e.preventDefault();
-    const { ok, data } = await api("POST", "/login/step2", { user_id: currentUserId, otp_code: $("#otpCode").value });
+    const { ok, data } = await api("POST", "/login/step2", { 
+      user_id: currentUserId, 
+      otp: $("#otpCode").value 
+    });
     if (!ok) return toast(data.detail || "Failed", "error");
-    sessionToken = data.token; saveSession(); showApp();
+    eccPrivateKey = $("#loginMasterKey").value; // Store the key we used in Step 1
+    sessionToken = data.token; currentUserId = data.user_id;
+    saveSession(); showApp();
   });
 
   async function fetchUser() {
@@ -375,13 +390,24 @@
   function iconName(f) { if (!f) return "description"; const e = f.split(".").pop().toLowerCase(); return { png: "image", jpg: "image", jpeg: "image", gif: "image", pdf: "picture_as_pdf", txt: "description", md: "description", js: "code", py: "code", zip: "folder_zip" }[e] || "description"; }
   function iconClass(f) { if (!f) return ""; const e = f.split(".").pop().toLowerCase(); return ["png", "jpg", "jpeg", "gif", "webp"].includes(e) ? "file-icon-img" : ["pdf"].includes(e) ? "file-icon-pdf" : ""; }
 
+  function power(base, exp, mod) {
+    let res = 1n; base = base % mod;
+    while (exp > 0n) {
+      if (exp % 2n === 1n) res = (res * base) % mod;
+      base = (base * base) % mod; exp = exp / 2n;
+    }
+    return res;
+  }
+
   window._renameFile = async (id, oldName) => {
     const newName = prompt("Enter new filename:", oldName);
     if (!newName || newName === oldName) return;
     if (!eccPrivateKey) return toast("Set key first", "error");
     
     // Encrypt the new name locally
-    const keys = deriveFullKeyPackage(eccPrivateKey);
+    const keys = await deriveFullKeyPackage(eccPrivateKey);
+    if (!keys) return toast("Failed to derive keys", "error");
+    
     const m = BigInt("0x" + Array.from(new TextEncoder().encode(newName)).map(b => b.toString(16).padStart(2, '0')).join(''));
     const enc = "0x" + power(m, BigInt(keys.rsa_pub[0]), BigInt(keys.rsa_pub[1])).toString(16);
     

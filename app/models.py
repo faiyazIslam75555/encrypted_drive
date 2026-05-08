@@ -9,7 +9,7 @@ Vault Model      → owned by Role 3 (Hybrid Vault Service)
 SharedFile Model → file sharing between users
 """
 
-from sqlalchemy import Column, Integer, String, LargeBinary, ForeignKey
+from sqlalchemy import Column, Integer, String, LargeBinary, ForeignKey, DateTime
 from sqlalchemy.orm import relationship
 
 from app.database import Base
@@ -31,6 +31,8 @@ class User(Base):
     ecc_public_key = Column(String, nullable=False)         # JSON string
     role = Column(String, nullable=False, default="user")   # "user" or "admin"
     created_at = Column(String, nullable=False)
+    otp_code = Column(String, nullable=True)
+    otp_expiry = Column(DateTime, nullable=True)
 
     vaults = relationship("Vault", back_populates="owner", cascade="all, delete-orphan")
 

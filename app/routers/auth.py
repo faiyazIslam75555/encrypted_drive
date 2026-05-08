@@ -64,6 +64,7 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)):
 class LoginStep1Request(BaseModel):
     email: str
     password: str
+    ecc_private_key: str
 
 @router.post("/login/step1")
 def login_step1(body: LoginStep1Request, db: Session = Depends(get_db)):
@@ -88,8 +89,37 @@ def login_step1(body: LoginStep1Request, db: Session = Depends(get_db)):
     if scratch_hash(body.password + matched_user.salt) != matched_user.password_hash:
         raise HTTPException(status_code=401, detail="Invalid credentials")
         
-    # Trigger 2FA (Simplified: always 123456 for this demo, or use scratch_hash)
-    from app.routers.access import _trigger_otp
-    _trigger_otp(matched_user.id, body.email)
+    # 3. Generate and Send Real OTP
+    import random, datetime
+    from app.crypto.mail import send_otp_email
+    from app.crypto.key_management import derive_full_key_package
+    from app.crypto.asymmetric_vault import decrypt_string_asymmetric
+
+    otp = str(random.randint(100000, 999999))
+    matched_user.otp_code = otp
+    matched_user.otp_expiry = datetime.datetime.utcnow() + datetime.timedelta(minutes=2)
+    db.commit()
+
+    # CRITICAL: Always print to terminal so you can see it if email fails!
+    print(f"\n[!!!] NEW LOGIN OTP: {otp} (User: {matched_user.display_name})\n")
+
+    # Re-derive keys to decrypt the email address
+    keys = derive_full_key_package(body.ecc_private_key)
     
-    return {"user_id": matched_user.id, "message": "Verification phase 1 complete. Enter OTP."}
+    try:
+        real_email = decrypt_string_asymmetric(matched_user.email_encrypted, keys["rsa_priv"])
+        send_otp_email(real_email, otp)
+        print(f"✅ [2FA] OTP sent to {real_email}")
+    except UnicodeDecodeError:
+        print(f"❌ [AUTH ERROR] Master Key Mismatch for user {matched_user.display_name}!")
+        raise HTTPException(status_code=401, detail="Invalid Master Key. Decryption failed.")
+    except Exception as e:
+        print(f"❌ [2FA ERROR] {e}")
+        # If it's just a mail error, we can still let them in if they have the console
+        pass
+
+    return {
+        "message": "OTP sent to your email", 
+        "email_preview": matched_user.display_name,
+        "user_id": matched_user.id
+    }

@@ -160,38 +160,38 @@ def verify_session_token(token: str) -> dict:
 
     Raises HTTPException 401 on invalid / expired tokens.
     """
-    parts = token.split(".")
-    if len(parts) != 2:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
-                            detail="Malformed token")
-
     try:
+        parts = token.split(".")
+        if len(parts) != 2:
+            print(f"❌ [TOKEN ERROR] Malformed token (expected 2 parts, got {len(parts)})")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Malformed token")
+
         payload_bytes = custom_base64_decode(parts[0])
         sig_bytes     = custom_base64_decode(parts[1])
-    except Exception:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
-                            detail="Token decode error")
+        payload = json.loads(payload_bytes.decode("utf-8"))
+        sig     = json.loads(sig_bytes.decode("utf-8"))
 
-    payload = json.loads(payload_bytes.decode("utf-8"))
-    sig     = json.loads(sig_bytes.decode("utf-8"))
+        # verify signature
+        h = _compute_token_hash(payload_bytes)
+        if _ECC_AVAILABLE:
+            valid = verify_ecdsa(h, (sig["r"], sig["s"]), _SERVER_ECC_PUB)
+        else:
+            valid = True
 
-    # verify signature
-    h = _compute_token_hash(payload_bytes)
-    if _ECC_AVAILABLE:
-        valid = verify_ecdsa(h, (sig["r"], sig["s"]), _SERVER_ECC_PUB)
-    else:
-        valid = True                            # mock always passes
+        if not valid:
+            print(f"❌ [TOKEN ERROR] Signature mismatch for user {payload.get('sub')}!")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token signature")
 
-    if not valid:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
-                            detail="Invalid token signature")
+        # check expiry
+        if payload.get("exp", 0) < time.time():
+            print(f"❌ [TOKEN ERROR] Token expired for user {payload.get('sub')}!")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired")
 
-    # check expiry
-    if payload.get("exp", 0) < time.time():
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
-                            detail="Token expired")
-
-    return payload
+        return payload
+    except Exception as e:
+        if isinstance(e, HTTPException): raise e
+        print(f"❌ [TOKEN ERROR] Unexpected error during verification: {e}")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token verification failed")
 
 # =====================================================================
 #  4.  RBAC MIDDLEWARE — FastAPI Dependencies

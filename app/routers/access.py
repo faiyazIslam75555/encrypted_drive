@@ -10,24 +10,45 @@ router = APIRouter()
 # ─── Role 2: Access / OTP (Existing) ───
 @router.post("/login/step2")
 def login_step2(
-    email: str = Body(...),
+    user_id: int = Body(...),
     otp: str = Body(...),
     db: Session = Depends(get_db)
 ):
     """Verifies the second factor (OTP) before granting access."""
-    # Simulation: Validates against a mock OTP
-    if otp != "123456" and not otp.startswith("610"): 
-        raise HTTPException(status_code=401, detail="Invalid 2FA code")
-    
-    user = db.query(User).filter(User.display_name == email).first() # Simplified check
+    user = db.query(User).filter(User.id == user_id).first()
     if not user:
-        # Try finding by encrypted email (In real app, we'd do this properly)
-        user = db.query(User).first() 
+        print(f"[AUTH ERROR] User ID {user_id} not found in database!")
+        raise HTTPException(status_code=401, detail="User not found")
+
+    if not user.otp_code:
+        print(f"[AUTH ERROR] No pending OTP found for user {user.display_name}. Did they start Step 1?")
+        raise HTTPException(status_code=401, detail="No pending OTP")
+    
+    if datetime.datetime.utcnow() > user.otp_expiry:
+        print(f"[AUTH ERROR] OTP EXPIRED for user {user.display_name}. Code was {user.otp_code}")
+        user.otp_code = None
+        db.commit()
+        raise HTTPException(status_code=401, detail="Your OTP has expired. Please go back and request a new one.")
+
+    if otp != user.otp_code:
+        print(f"[AUTH ERROR] OTP MISMATCH for user {user.display_name}. Expected: '{user.otp_code}', Received: '{otp}'")
+        raise HTTPException(status_code=401, detail="Incorrect OTP code. Please check your email and try again.")
+    
+    from app.dependencies import create_session_token
+    token = create_session_token(user.id, role=user.role or "user")
+
+    print(f"[AUTH SUCCESS] User {user.id} verified successfully!")
+    # Clear OTP after success
+    user.otp_code = None
+    db.commit()
+
+    from app.dependencies import create_session_token
+    token = create_session_token(user.id, role=user.role or "user")
 
     return {
         "message": "Access granted",
-        "token": "simulated_token_" + str(user.id if user else 0),
-        "user_id": user.id if user else 0
+        "token": token,
+        "user_id": user.id
     }
 
 # ─── Profile / Edit (New Requirements) ───

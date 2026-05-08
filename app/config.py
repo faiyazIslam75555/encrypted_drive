@@ -11,6 +11,11 @@ import os
 # ---------------------------------------------------------------------------
 DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./secure_vault.db")
 
+# ─── 2FA Email Config ───
+SENDER_EMAIL = "aunondas@gmail.com"
+SENDER_PASSWORD = "akkd piaz mgbl dzxf"  # Your App Password
+OTP_EXPIRY_SEC = 120
+
 # ---------------------------------------------------------------------------
 # Session / Token
 # ---------------------------------------------------------------------------
