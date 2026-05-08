@@ -1,102 +1,49 @@
 """
 ================================================================
-Key Management Module
+Key Management Service (Role 4)
 ================================================================
-Responsible for:
-  • Generating ECC key pairs for users.
-  • Deriving RSA key pairs deterministically from ECC private keys.
-  • Key recovery: given an ECC private key, regenerate both key pairs.
-  • Public key serialisation for storage / distribution.
-
-Private keys are NEVER stored on the server.
+Handles deterministic key derivation and distribution.
+Zero-knowledge: No private keys are stored.
 """
 
-import json
+from .ecc import point_mul, G, N, generate_ecc_keypair as generate_ecc_keys
+from .rsa import generate_rsa_keys
+from .hash import scratch_hash
+import random
 
-from app.crypto.ecc import (
-    generate_ecc_keypair,
-    serialize_ecc_public_key,
-    scalar_multiply,
-    G,
-)
-from app.crypto.rsa import (
-    derive_rsa_keypair_from_seed,
-)
-
-
-def generate_user_keys():
+def derive_full_key_package(master_ecc_priv_str: str):
     """
-    Generate a complete set of user keys.
-
-    Returns
-    -------
-    dict with:
-      ecc_private_key : int   — user must download and keep this
-      ecc_public_key  : (x, y)
-      rsa_public_key  : (e, n)
-      rsa_private_key : (d, n) — returned once, never stored
+    Given the Master ECC Private Key, derive:
+    1. The ECC Public Key
+    2. The RSA Keypair (deterministically)
+    
+    This fulfills the requirement that the user only remembers the ECC key.
     """
-    ecc_priv, ecc_pub = generate_ecc_keypair()
-    rsa_pub, rsa_priv = derive_rsa_keypair_from_seed(ecc_priv)
-
+    try:
+        if master_ecc_priv_str.startswith('0x'):
+            priv_int = int(master_ecc_priv_str, 16)
+        else:
+            priv_int = int(master_ecc_priv_str)
+    except:
+        # If it's a password/phrase, hash it to get a key
+        h = scratch_hash(master_ecc_priv_str)
+        priv_int = int(h, 16) % N
+    
+    # 1. ECC Keys
+    ecc_priv = priv_int
+    ecc_pub = point_mul(ecc_priv, G)
+    
+    # 2. RSA Keys (Deterministic Seed)
+    # We use the master private key to seed the RSA prime generation.
+    seed_val = scratch_hash(str(priv_int) + "RSA_SYSTEM_SEED")
+    random.seed(seed_val)
+    
+    # RSA Key Generation (1024 bits for balance of security/performance in pure python)
+    rsa_pub, rsa_priv = generate_rsa_keys(bits=1024)
+    
     return {
-        "ecc_private_key": ecc_priv,
-        "ecc_public_key": ecc_pub,
-        "rsa_public_key": rsa_pub,
-        "rsa_private_key": rsa_priv,
+        "ecc_priv": ecc_priv,
+        "ecc_pub": ecc_pub,
+        "rsa_pub": rsa_pub,
+        "rsa_priv": rsa_priv
     }
-
-
-def recover_keys_from_ecc(ecc_private_key: int):
-    """
-    Recover all key pairs from the ECC private key.
-
-    This is the core of the "single key to remember" design:
-    the RSA key pair is deterministically derived from the ECC key.
-
-    Parameters
-    ----------
-    ecc_private_key : int
-
-    Returns
-    -------
-    dict with:
-      ecc_public_key  : (x, y)
-      rsa_public_key  : (e, n)
-      rsa_private_key : (d, n)
-    """
-    ecc_pub = scalar_multiply(ecc_private_key, G)
-    rsa_pub, rsa_priv = derive_rsa_keypair_from_seed(ecc_private_key)
-
-    return {
-        "ecc_public_key": ecc_pub,
-        "rsa_public_key": rsa_pub,
-        "rsa_private_key": rsa_priv,
-    }
-
-
-def serialize_keys_for_storage(ecc_pub, rsa_pub):
-    """
-    Serialize public keys for database storage.
-
-    Returns
-    -------
-    (ecc_pub_json, rsa_pub_json) : (str, str)
-    """
-    ecc_pub_json = serialize_ecc_public_key(ecc_pub)
-    rsa_pub_json = json.dumps({"e": rsa_pub[0], "n": rsa_pub[1]})
-    return ecc_pub_json, rsa_pub_json
-
-
-def serialize_private_keys_for_download(ecc_priv, rsa_priv):
-    """
-    Serialize private keys for ONE-TIME download by the user.
-    After this, private keys are never accessible again from the server.
-
-    Returns
-    -------
-    (ecc_priv_json, rsa_priv_json) : (str, str)
-    """
-    ecc_priv_json = json.dumps({"d": ecc_priv})
-    rsa_priv_json = json.dumps({"d": rsa_priv[0], "n": rsa_priv[1]})
-    return ecc_priv_json, rsa_priv_json

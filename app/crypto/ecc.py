@@ -1,424 +1,76 @@
 """
-==============================================================
-Role 2 — Access Service: Elliptic Curve Math Engine & ECDSA
-==============================================================
-All ECC primitives are implemented from scratch using pure
-Python integer arithmetic.  ECC is used **only** for digital
-signatures (ECDSA) — never for data encryption.
-
-Two curve configurations are available (controlled by the
-``ECC_CURVE`` environment variable):
-
-  • ``"small"``  (default) — a 64-bit curve suitable for fast
-    development and testing on pure-Python math.
-  • ``"secp256k1"`` — the production Bitcoin curve (very slow
-    in pure Python; expect minutes per key generation).
-
-Exports
--------
-* generate_ecc_keypair()     → (private_key_int, public_key_point)
-* sign_data_with_ecc(data_hash, private_key)
-                             → signature JSON str {"r": ..., "s": ...}
-* verify_ecc_signature(data_hash, signature_json, public_key_json)
-                             → bool
-* serialize_ecc_public_key(point)   → JSON str
-* deserialize_ecc_public_key(json)  → (x, y) | None
-* custom_data_hash(data_bytes)      → int  (256-bit hash for ECDSA)
+================================================================
+Scratch Cryptography: ECC Implementation
+================================================================
 """
+import random, json
 
-import os
-import random
-import json
+# SECP256K1
+P = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
+A = 0
+B = 7
+G = (0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798,
+     0x483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8)
+N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 
-# =====================================================================
-#  1.  CURVE PARAMETERS
-# =====================================================================
-#  The "small" curve has PRIME order N=211, which is required for
-#  ECDSA to work correctly.  Parameters verified by brute-force
-#  order computation and end-to-end sign/verify testing.
-#
-#  Curve:  y² ≡ x³ + 3x + 7  (mod 1019)
-#  Generator G = (1, 101)  — verified on curve
-#  Order N = 211           — verified prime
-# =====================================================================
-
-_ECC_CURVE = os.getenv("ECC_CURVE", "small")
-
-if _ECC_CURVE == "secp256k1":
-    # ---- PRODUCTION: secp256k1 (Bitcoin curve) ----
-    P  = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
-    A  = 0
-    B  = 7
-    Gx = 0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798
-    Gy = 0x483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8
-    N  = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
-else:
-    # ---- DEVELOPMENT: small prime-order elliptic curve ----
-    # y² ≡ x³ + 3x + 7  (mod 1019)
-    P  = 1019          # prime field
-    A  = 3             # curve coefficient a
-    B  = 7             # curve coefficient b
-    Gx = 1             # generator x
-    Gy = 101           # generator y  (101² mod 1019 = 1+3+7 = 11 ✓)
-    N  = 211           # order of G  (PRIME — required for ECDSA)
-
-G = (Gx, Gy)
-IDENTITY = None                  # point at infinity
-
-# =====================================================================
-#  2.  MODULAR ARITHMETIC HELPERS
-# =====================================================================
-
-def _extended_gcd(a: int, b: int):
-    """Return (gcd, x, y) with a·x + b·y = gcd(a, b)."""
-    if a == 0:
-        return b, 0, 1
-    g, x1, y1 = _extended_gcd(b % a, a)
-    return g, y1 - (b // a) * x1, x1
-
-
-def _mod_inverse(a: int, m: int) -> int:
-    """Compute a⁻¹ mod m."""
-    a = a % m
-    g, x, _ = _extended_gcd(a, m)
-    if g != 1:
-        raise ValueError("Modular inverse does not exist")
-    return x % m
-
-# =====================================================================
-#  3.  ELLIPTIC CURVE POINT OPERATIONS
-# =====================================================================
+def mod_inv(a, p):
+    if a % p == 0: return 0
+    return pow(a, p - 2, p) # Small exception for speed, but could use extended_gcd
 
 def point_add(p1, p2):
-    """
-    Add two points on the active elliptic curve.
-    Points are tuples (x, y) or None (identity).
-    """
-    if p1 is IDENTITY:
-        return p2
-    if p2 is IDENTITY:
-        return p1
-
+    if p1 is None: return p2
+    if p2 is None: return p1
     x1, y1 = p1
     x2, y2 = p2
-
-    if x1 == x2 and y1 != y2:
-        return IDENTITY
-
-    if x1 == x2 and y1 == y2:
-        return point_double(p1)
-
-    s = ((y2 - y1) * _mod_inverse(x2 - x1, P)) % P
-    x3 = (s * s - x1 - x2) % P
-    y3 = (s * (x1 - x3) - y1) % P
+    if x1 == x2 and y1 != y2: return None
+    if x1 == x2:
+        m = (3 * x1 * x1 + A) * mod_inv(2 * y1, P)
+    else:
+        m = (y2 - y1) * mod_inv(x2 - x1, P)
+    x3 = (m * m - x1 - x2) % P
+    y3 = (m * (x1 - x3) - y1) % P
     return (x3, y3)
 
-
-def point_double(pt):
-    """Double a point on the curve."""
-    if pt is IDENTITY:
-        return IDENTITY
-
-    x, y = pt
-    if y == 0:
-        return IDENTITY
-
-    s = ((3 * x * x + A) * _mod_inverse(2 * y, P)) % P
-    x3 = (s * s - 2 * x) % P
-    y3 = (s * (x - x3) - y) % P
-    return (x3, y3)
-
-
-def scalar_multiply(k: int, point):
-    """
-    Compute k·P using the double-and-add algorithm.
-    """
-    result = IDENTITY
-    addend = point
-    k = k % N
+def point_mul(k, p):
+    res = None
+    base = p
     while k > 0:
-        if k & 1:
-            result = point_add(result, addend)
-        addend = point_double(addend)
-        k >>= 1
-    return result
+        if k % 2 == 1: res = point_add(res, base)
+        base = point_add(base, base)
+        k //= 2
+    return res
 
-# =====================================================================
-#  4.  ECC KEY GENERATION
-# =====================================================================
+# Aliases for compatibility
+scalar_multiply = point_mul
 
 def generate_ecc_keypair():
-    """
-    Generate an ECC key pair on the active curve.
+    priv = random.randint(1, N - 1)
+    pub = point_mul(priv, G)
+    return priv, pub
 
-    Returns
-    -------
-    private_key : int
-    public_key  : (int, int)
-    """
-    private_key = random.randrange(1, N)
-    public_key  = scalar_multiply(private_key, G)
-    return private_key, public_key
+# More aliases
+generate_ecc_keys = generate_ecc_keypair
 
-# =====================================================================
-#  5.  CUSTOM DATA HASH  (256-bit)
-# =====================================================================
+def sign_ecdsa(z, private_key):
+    k = random.randint(1, N - 1)
+    r_pt = point_mul(k, G)
+    r = r_pt[0] % N
+    if r == 0: return sign_ecdsa(z, private_key)
+    s = (pow(k, N - 2, N) * (z + r * private_key)) % N
+    if s == 0: return sign_ecdsa(z, private_key)
+    return r, s
 
-_HASH_IV = [
-    0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A,
-    0x510E527F, 0x9B05688C, 0x1F83D9AB, 0x5BE0CD19,
-]
+def verify_ecdsa(z, sig, public_key):
+    r, s = sig
+    if not (0 < r < N and 0 < s < N): return False
+    w = pow(s, N - 2, N)
+    u1 = (z * w) % N
+    u2 = (r * w) % N
+    p = point_add(point_mul(u1, G), point_mul(u2, public_key))
+    if p is None: return False
+    return r == p[0] % N
 
-_MIX_K = [
-    0x85EBCA6B, 0xC2B2AE35, 0x27D4EB2F, 0x165667B1,
-    0xE6546B64, 0xD34D34D3, 0xABCDEF01, 0x13579BDF,
-]
-
-
-def _rotl32(v: int, s: int) -> int:
-    return ((v << s) | (v >> (32 - s))) & 0xFFFFFFFF
-
-
-def custom_data_hash(data: bytes) -> int:
-    """
-    Produce a 256-bit hash of *data* as a Python int.
-    Used as the message digest for ECDSA sign / verify.
-    """
-    h = list(_HASH_IV)
-
-    for i, bv in enumerate(data):
-        lane = i % 8
-        h[lane] ^= bv << ((i % 4) * 8)
-        h[lane] = _rotl32(h[lane], 5)
-        h[lane] = (h[lane] ^ h[(lane + 1) % 8]) & 0xFFFFFFFF
-        h[lane] = (h[lane] * _MIX_K[lane] + i) & 0xFFFFFFFF
-
-    for rnd in range(256):
-        for lane in range(8):
-            h[lane] ^= _rotl32(h[(lane + 1) % 8], 13)
-            h[lane] ^= (h[lane] >> 17)
-            h[lane] = (h[lane] ^ _rotl32(h[lane], 5)) & 0xFFFFFFFF
-            h[lane] = (h[lane] + h[(lane + 3) % 8] + rnd) & 0xFFFFFFFF
-
-    result = 0
-    for i, v in enumerate(h):
-        result |= v << (32 * i)
-    return result
-
-# =====================================================================
-#  6.  ECDSA — SIGN
-# =====================================================================
-
-def sign_ecdsa(message_hash: int, private_key: int):
-    """
-    Sign a hash using ECDSA.
-
-    Returns (r, s).
-    """
-    z = message_hash % N
-    while True:
-        k     = random.randrange(1, N)
-        R_pt  = scalar_multiply(k, G)
-        if R_pt is IDENTITY:
-            continue
-        r = R_pt[0] % N
-        if r == 0:
-            continue
-        try:
-            k_inv = _mod_inverse(k, N)
-        except ValueError:
-            continue                    # k not coprime to N, retry
-        s     = (k_inv * (z + r * private_key)) % N
-        if s == 0:
-            continue
-        return (r, s)
-
-# =====================================================================
-#  7.  ECDSA — VERIFY
-# =====================================================================
-
-def verify_ecdsa(message_hash: int, signature, public_key) -> bool:
-    """Verify an ECDSA signature."""
-    r, s = signature
-    if not (1 <= r < N and 1 <= s < N):
-        return False
-
-    z = message_hash % N
-    try:
-        s_inv = _mod_inverse(s, N)
-    except ValueError:
-        return False                    # s not invertible → invalid sig
-    u1 = (z * s_inv) % N
-    u2 = (r * s_inv) % N
-
-    point = point_add(
-        scalar_multiply(u1, G),
-        scalar_multiply(u2, public_key),
-    )
-
-    if point is IDENTITY:
-        return False
-    return (point[0] % N) == r
-
-# =====================================================================
-#  8.  OUTPUT BOUNDARY — clean wrappers for Role 3
-# =====================================================================
-
-def sign_data_with_ecc(data_hash: int, private_key: int) -> str:
-    """Sign *data_hash* → JSON signature string for Role 3."""
-    r, s = sign_ecdsa(data_hash, private_key)
-    return json.dumps({"r": r, "s": s})
-
-
-def verify_ecc_signature(data_hash: int,
-                          signature_json: str,
-                          public_key_json: str) -> bool:
-    """Verify an ECDSA signature from JSON-encoded values."""
-    sig = json.loads(signature_json)
-    pk  = json.loads(public_key_json)
-    signature  = (sig["r"], sig["s"])
-    public_key = (pk["x"], pk["y"])
-    return verify_ecdsa(data_hash, signature, public_key)
-
-# =====================================================================
-#  9.  SERIALIZATION HELPERS
-# =====================================================================
-
-def serialize_ecc_public_key(point) -> str:
-    if point is IDENTITY:
-        return json.dumps({"x": None, "y": None})
-    return json.dumps({"x": point[0], "y": point[1]})
-
-
-def deserialize_ecc_public_key(data: str):
-    d = json.loads(data)
-    if d["x"] is None:
-        return IDENTITY
-    return (d["x"], d["y"])
-
-# =====================================================================
-#  10.  ECC ENCRYPTION / DECRYPTION (ECIES-like)
-# =====================================================================
-#
-#  Uses Elliptic Curve Integrated Encryption Scheme:
-#    Encrypt:
-#      1. Generate ephemeral keypair (k, R = k·G)
-#      2. Compute shared point S = k · recipient_pubkey
-#      3. Derive key stream from hash of S
-#      4. XOR plaintext with key stream
-#      5. Return (R, ciphertext)
-#
-#    Decrypt:
-#      1. Compute S = private_key · R
-#      2. Derive same key stream
-#      3. XOR to recover plaintext
-# =====================================================================
-
-def _derive_stream(shared_point, length: int) -> bytes:
-    """
-    Derive a byte stream of given length from a shared EC point.
-    Uses the custom hash function in counter mode.
-    """
-    if shared_point is IDENTITY:
-        raise ValueError("Shared point is identity — invalid")
-    sx, sy = shared_point
-    stream = bytearray()
-    counter = 0
-    while len(stream) < length:
-        # Hash the shared secret with a counter
-        block_data = f"{sx}:{sy}:{counter}".encode("utf-8")
-        h = custom_data_hash(block_data)
-        # Convert hash integer to 32 bytes
-        h_bytes = []
-        temp = h
-        for _ in range(32):
-            h_bytes.append(temp & 0xFF)
-            temp >>= 8
-        stream.extend(h_bytes)
-        counter += 1
-    return bytes(stream[:length])
-
-
-def ecc_encrypt(plaintext_bytes: bytes, recipient_public_key) -> dict:
-    """
-    Encrypt data using ECIES-like scheme with the recipient's ECC public key.
-
-    Parameters
-    ----------
-    plaintext_bytes      : bytes — data to encrypt.
-    recipient_public_key : (x, y) — recipient's ECC public key point.
-
-    Returns
-    -------
-    dict with:
-      "R" : {"x": ..., "y": ...}  — ephemeral public key
-      "ct": [int, ...]            — ciphertext as list of byte values
-    """
-    # Generate ephemeral keypair
-    k = random.randrange(1, N)
-    R = scalar_multiply(k, G)
-
-    # Compute shared secret
-    S = scalar_multiply(k, recipient_public_key)
-    if S is IDENTITY:
-        raise ValueError("Degenerate shared secret")
-
-    # Derive key stream
-    stream = _derive_stream(S, len(plaintext_bytes))
-
-    # XOR encrypt
-    ct = bytes(a ^ b for a, b in zip(plaintext_bytes, stream))
-
-    return {
-        "R": {"x": R[0], "y": R[1]},
-        "ct": list(ct),
-    }
-
-
-def ecc_decrypt(encrypted: dict, private_key: int) -> bytes:
-    """
-    Decrypt ECIES-encrypted data using the recipient's ECC private key.
-
-    Parameters
-    ----------
-    encrypted   : dict with "R" and "ct" keys.
-    private_key : int — recipient's ECC private key.
-
-    Returns
-    -------
-    bytes — decrypted plaintext.
-    """
-    R = (encrypted["R"]["x"], encrypted["R"]["y"])
-    ct = bytes(encrypted["ct"])
-
-    # Compute shared secret
-    S = scalar_multiply(private_key, R)
-    if S is IDENTITY:
-        raise ValueError("Degenerate shared secret")
-
-    # Derive key stream
-    stream = _derive_stream(S, len(ct))
-
-    # XOR decrypt
-    return bytes(a ^ b for a, b in zip(ct, stream))
-
-
-def ecc_encrypt_session_key(sym_key: int, recipient_public_key) -> str:
-    """
-    Encrypt a symmetric session key with the recipient's ECC public key.
-    Returns JSON string of the encrypted key.
-    """
-    # Convert int key to bytes (8 bytes for 64-bit key)
-    key_bytes = sym_key.to_bytes(8, "big")
-    encrypted = ecc_encrypt(key_bytes, recipient_public_key)
-    return json.dumps(encrypted)
-
-
-def ecc_decrypt_session_key(encrypted_json: str, private_key: int) -> int:
-    """
-    Decrypt an ECC-encrypted symmetric session key.
-    Returns the integer session key.
-    """
-    encrypted = json.loads(encrypted_json)
-    key_bytes = ecc_decrypt(encrypted, private_key)
-    return int.from_bytes(key_bytes, "big")
+# Custom hash for dependencies compatibility
+from .hash import scratch_hash
+def custom_data_hash(data_bytes):
+    return int(scratch_hash(data_bytes), 16)
