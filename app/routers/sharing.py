@@ -103,6 +103,7 @@ class SendFileBody(BaseModel):
 
 @router.post("/share/send")
 def send_file(body: SendFileBody, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    print("\n[CRYPTO-VERIFY] 🛡️  ECDH HYBRID PIPELINE ENGAGED (V2.0-COMMAS) 🛡️\n")
     # Verify the request is accepted
     req = db.query(ShareRequest).filter(
         ShareRequest.id == body.request_id,
@@ -122,7 +123,9 @@ def send_file(body: SendFileBody, current_user: User = Depends(get_current_user)
         SharedFile.shared_by == current_user.id,
         SharedFile.shared_with == req.receiver_id
     ).first()
-    if already: raise HTTPException(status_code=400, detail="Already shared this file with this user.")
+    if already: 
+        print("ERROR: Already shared this file with this user.")
+        raise HTTPException(status_code=400, detail="Already shared this file with this user.")
 
     # Decrypt sender's file
     sender_keys = derive_full_key_package(body.ecc_private_key)
@@ -130,52 +133,65 @@ def send_file(body: SendFileBody, current_user: User = Depends(get_current_user)
     if not entry: raise HTTPException(status_code=404, detail="File not found")
 
     try:
-        from app.crypto.asymmetric_vault import decrypt_file_ecc
-        plaintext = decrypt_file_ecc(entry.encrypted_payload, sender_keys["ecc_priv"])
+        from app.crypto.asymmetric_vault import hybrid_decrypt_ecc
+        
+        # In the Vault, the wrapped AES key is stored in the mac_hash column
+        # and the ciphertext is stored in the encrypted_payload column.
+        wrapped_key = entry.mac_hash
+        ciphertext = entry.encrypted_payload
+        
+        if wrapped_key and "," in wrapped_key:
+            # New Hybrid ECC Format (ECDH)
+            plaintext = hybrid_decrypt_ecc(wrapped_key, ciphertext, sender_keys["ecc_priv"])
+        else:
+            # Legacy RSA Format (Pre-Hybrid Encryption)
+            from app.crypto.asymmetric_vault import decrypt_file_asymmetric
+            plaintext = decrypt_file_asymmetric(ciphertext, sender_keys["rsa_priv"])
+            
         filename = decrypt_string_asymmetric(entry.filename_encrypted, sender_keys["rsa_priv"])
-    except Exception:
-        raise HTTPException(
-            status_code=400, 
-            detail="ECC Decryption failed. This file may have been secured with an older key version. Please delete it from your drive and re-upload it before sharing again."
-        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"ERROR: Failed to decrypt your file: {e}")
+        raise HTTPException(status_code=400, detail=f"Failed to decrypt your file: {e}")
 
-    # Compute MAC
+    # Compute MAC for data integrity
     mac = scratch_hash(plaintext)
 
-    # Re-encrypt for recipient
-    if body.encryption_type == "ecc":
-        # ECC Path
-        try:
-            pub = json.loads(recipient.ecc_public_key)
-            recipient_ecc_pub = (int(pub["x"], 16), int(pub["y"], 16))
-        except:
-            raise HTTPException(status_code=400, detail="Invalid recipient ECC public key.")
-        
-        # ECC re-encryption (Point-based)
-        # For simplicity, we wrap the RSA decryption key into ECC
-        # This is a hybrid approach: "ECC protecting RSA"
-        from app.crypto.ecc import ecc_encrypt
-        c1, c2 = ecc_encrypt(sender_keys["rsa_priv"][0], recipient_ecc_pub)
-        
-        # We store the ECC points as the "key" to unlock the RSA-encrypted payload
-        # This demonstrates using ECC for the transfer layer
-        enc_payload = entry.encrypted_payload # Keep original RSA payload
-        enc_filename = entry.filename_encrypted
-        enc_mac = json.dumps({"c1": [hex(c1[0]), hex(c1[1])], "c2": [hex(c2[0]), hex(c2[1])]})
-    else:
-        # RSA Path (Standard)
-        try:
-            pub = json.loads(recipient.rsa_public_key)
-            if isinstance(pub, list):
-                recipient_pub_key = (int(pub[0]), int(pub[1]))
-            else:
-                recipient_pub_key = (int(pub["n"]), int(pub["e"]))
-        except Exception:
-            raise HTTPException(status_code=400, detail="Invalid recipient public key format.")
+    # Re-encrypt for recipient using secure Hybrid Encryption
+    try:
+        pub = json.loads(recipient.ecc_public_key)
+        recipient_ecc_pub = (int(pub["x"], 16), int(pub["y"], 16))
+    except Exception as e:
+        print(f"ERROR: Invalid recipient ECC public key. {e}")
+        raise HTTPException(status_code=400, detail="Invalid recipient ECC public key.")
 
-        enc_payload = encrypt_file_asymmetric(plaintext, recipient_pub_key)
-        enc_filename = encrypt_string_asymmetric(filename, recipient_pub_key)
-        enc_mac = encrypt_string_asymmetric(mac, recipient_pub_key)
+    from app.crypto.asymmetric_vault import hybrid_encrypt_ecc
+    try:
+        wrapped_key, ciphertext = hybrid_encrypt_ecc(plaintext, recipient_ecc_pub)
+        enc_payload = f"{wrapped_key}::{ciphertext}"
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"ERROR: Hybrid Encrypt ECC failed. {e}")
+        raise HTTPException(status_code=400, detail=f"Hybrid Encrypt ECC failed. {e}")
+    
+    # Encrypt filename and MAC using recipient's RSA key
+    try:
+        pub_rsa = json.loads(recipient.rsa_public_key)
+        recipient_rsa_pub = tuple(pub_rsa)
+    except Exception as e:
+        print(f"ERROR: Invalid recipient RSA public key. {e}")
+        raise HTTPException(status_code=400, detail="Invalid recipient RSA public key.")
+
+    try:
+        enc_filename = encrypt_string_asymmetric(filename, recipient_rsa_pub)
+        enc_mac = encrypt_string_asymmetric(mac, recipient_rsa_pub)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"ERROR: Encrypt string failed. {e}")
+        raise HTTPException(status_code=400, detail=f"Encrypt string failed. {e}")
 
     shared = SharedFile(
         vault_id=body.vault_id,
@@ -187,9 +203,9 @@ def send_file(body: SendFileBody, current_user: User = Depends(get_current_user)
         created_at=datetime.datetime.utcnow().isoformat()
     )
     db.add(shared)
-    # Update status but don't hide it
     req.status = "completed"
     db.commit()
+    print("SUCCESS: File encrypted and sent!")
     return {"message": "File encrypted and sent!", "share_id": shared.id}
 
 
@@ -212,11 +228,18 @@ def download_shared(share_id: int, ecc_private_key: str, current_user: User = De
 
     keys = derive_full_key_package(ecc_private_key)
     try:
-        plaintext = decrypt_file_asymmetric(share.encrypted_payload, keys["rsa_priv"])
+        from app.crypto.asymmetric_vault import hybrid_decrypt_ecc, decrypt_file_asymmetric
+        parts = share.encrypted_payload.split("::")
+        if len(parts) == 2:
+            wrapped_key, ciphertext = parts
+            plaintext = hybrid_decrypt_ecc(wrapped_key, ciphertext, keys["ecc_priv"])
+        else:
+            plaintext = decrypt_file_asymmetric(share.encrypted_payload, keys["rsa_priv"])
+            
         filename = decrypt_string_asymmetric(share.filename_encrypted, keys["rsa_priv"])
         expected_mac = decrypt_string_asymmetric(share.encrypted_mac, keys["rsa_priv"])
-    except Exception:
-        raise HTTPException(status_code=400, detail="Decryption failed.")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Decryption failed: {e}")
 
     if scratch_hash(plaintext) != expected_mac:
         raise HTTPException(status_code=400, detail="INTEGRITY FAILED: File corrupted.")

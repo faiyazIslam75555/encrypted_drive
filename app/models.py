@@ -22,9 +22,11 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    display_name = Column(String, nullable=False, default="User")  # Public name for sharing
+    display_name = Column(String, nullable=False, default="User")  # Plaintext for search
     username_encrypted = Column(String, nullable=False)     # RSA-encrypted hex
     email_encrypted = Column(String, nullable=False)        # RSA-encrypted hex
+    phone_encrypted = Column(String, nullable=True)         # RSA-encrypted hex
+    profile_pic_encrypted = Column(String, nullable=True)   # RSA-encrypted hex (or base64)
     password_hash = Column(String, nullable=False)          # Scratch hash
     salt = Column(String, nullable=False)                   
     rsa_public_key = Column(String, nullable=False)         # JSON string

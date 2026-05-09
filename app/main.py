@@ -35,9 +35,22 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# ---------------------------------------------------------------------------
-#  Register routers
-# ---------------------------------------------------------------------------
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc):
+    print(f"\n🔥 [422 ERROR] {request.method} {request.url}")
+    print(f"  -> ERROR DETAILS: {exc.errors()}")
+    # Attempt to print the raw body if possible
+    try:
+        body = await request.body()
+        print(f"  -> RAW BODY SENT: {body.decode()}")
+    except:
+        print("  -> (Could not read raw body)")
+    print(f"  -> HELP: The server is expecting exactly: 'username' and 'ecc_private_key'\n")
+    return JSONResponse(status_code=422, content={"detail": exc.errors()})
+
 app.include_router(auth.router)       # Role 1 — Identity
 app.include_router(access.router)     # Role 2 — Access / OTP
 app.include_router(vault.router)      # Role 3 — Hybrid Vault

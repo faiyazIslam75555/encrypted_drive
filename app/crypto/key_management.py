@@ -41,7 +41,9 @@ def derive_full_key_package(master_ecc_priv_str: str):
     # 2. RSA Keys (Deterministic Seed)
     # We use the master private key to seed the RSA prime generation.
     seed_val = scratch_hash(str(priv_int) + "RSA_SYSTEM_SEED")
-    random.seed(seed_val)
+    # CRITICAL FIX: Python 3 randomizes string hashing per-process. 
+    # We MUST convert the hex string to an integer for the seed to be deterministic across restarts!
+    random.seed(int(seed_val, 16))
     
     # RSA Key Generation (1024 bits for balance of security/performance in pure python)
     rsa_pub, rsa_priv = generate_rsa_keys(bits=1024)

@@ -30,13 +30,16 @@ def get_profile(
     if ecc_private_key:
         try:
             keys = derive_full_key_package(ecc_private_key)
-            from app.crypto.rsa import rsa_decrypt
-            uname_int = rsa_decrypt(int(current_user.username_encrypted, 16), keys["rsa_priv"])
-            result["username"] = uname_int.to_bytes((uname_int.bit_length() + 7) // 8, 'big').decode('utf-8')
-            email_int = rsa_decrypt(int(current_user.email_encrypted, 16), keys["rsa_priv"])
-            result["email"] = email_int.to_bytes((email_int.bit_length() + 7) // 8, 'big').decode('utf-8')
+            result["username"] = decrypt_string_asymmetric(current_user.username_encrypted, keys["rsa_priv"])
+            result["email"] = decrypt_string_asymmetric(current_user.email_encrypted, keys["rsa_priv"])
+            
+            if current_user.phone_encrypted:
+                result["phone"] = decrypt_string_asymmetric(current_user.phone_encrypted, keys["rsa_priv"])
+            
+            if current_user.profile_pic_encrypted:
+                result["profile_pic"] = decrypt_string_asymmetric(current_user.profile_pic_encrypted, keys["rsa_priv"])
         except Exception:
-            pass
+            raise HTTPException(status_code=401, detail="Invalid Master Key for this account.")
     return result
 
 # ─── Upload ───
@@ -47,27 +50,28 @@ async def upload_file(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    # 1. Derive keys and read file
+    keys = derive_full_key_package(ecc_private_key)
+    file_bytes = await file.read()
+    file_size = len(file_bytes)
+    
     # 2. Hybrid Encryption: AES for file, ECC to wrap the AES key
     from app.crypto.asymmetric_vault import hybrid_encrypt_ecc
     ecc_pub = (int(keys["ecc_pub"][0]), int(keys["ecc_pub"][1]))
     wrapped_key, ciphertext = hybrid_encrypt_ecc(file_bytes, ecc_pub)
     
-    # Store the wrapped key in mac_hash or a new column (using mac_hash for now)
-    encrypted_payload = ciphertext
-    stored_wrapped_key = wrapped_key
-    
-    # 2. MAC + Signature
+    # 3. MAC + Signature
     mac, sig = secure_sign_and_mac(file_bytes, keys["ecc_priv"])
     
-    # 3. Encrypted Filename
+    # 4. Encrypted Filename
     enc_filename = encrypt_string_asymmetric(file.filename, keys["rsa_pub"])
     
     vault_entry = Vault(
         owner_id=current_user.id,
         filename_encrypted=enc_filename,
-        encrypted_payload=encrypted_payload,
+        encrypted_payload=ciphertext,
         digital_signature=json.dumps({"r": hex(sig[0]), "s": hex(sig[1])}),
-        mac_hash=stored_wrapped_key, # Store the ECC-wrapped AES key here
+        mac_hash=wrapped_key,
         file_size=file_size,
         uploaded_at=datetime.datetime.utcnow().isoformat()
     )
@@ -78,11 +82,22 @@ async def upload_file(
 
 # ─── List Files ───
 @router.get("/vault/list")
-def list_vaults(
+def list_files(
     ecc_private_key: str = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    """Lists files for the current user, decrypting filenames if the key is provided."""
+    # 🛡️ STRICT VERIFICATION: Prove the key can decrypt your own name first
+    if ecc_private_key:
+        try:
+            keys = derive_full_key_package(ecc_private_key)
+            decrypt_string_asymmetric(current_user.username_encrypted, keys["rsa_priv"])
+        except Exception:
+            raise HTTPException(status_code=401, detail="Invalid Master Key for this account.")
+    else:
+        raise HTTPException(status_code=401, detail="Master Key required.")
+
     vaults = db.query(Vault).filter(Vault.owner_id == current_user.id).order_by(Vault.id.desc()).all()
     entries = []
     

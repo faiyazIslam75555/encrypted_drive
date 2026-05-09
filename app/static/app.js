@@ -22,8 +22,11 @@
     if (!isForm) h["Content-Type"] = "application/json";
     try {
       const r = await fetch(API + path, { method, headers: h, body: isForm ? body : (body ? JSON.stringify(body) : undefined) });
-      if (r.status === 401) { logout(); return { ok: false, data: {} }; }
       const d = (r.headers.get("content-type") || "").includes("json") ? await r.json() : {};
+      // Only auto-logout if the TOKEN itself is invalid (not just a bad Master Key)
+      if (r.status === 401 && d.detail && (d.detail.includes("Token") || d.detail.includes("token") || d.detail.includes("Bearer"))) {
+        logout(); return { ok: false, data: d };
+      }
       return { ok: r.ok, data: d };
     } catch { return { ok: false, data: {} }; }
   }
@@ -85,13 +88,29 @@
   async function fetchUser() {
     const kp = eccPrivateKey ? `?ecc_private_key=${encodeURIComponent(eccPrivateKey)}` : "";
     const { ok, data } = await api("GET", `/me${kp}`);
-    if (!ok) return;
-    currentUserId = data.user_id;
+    
+    if (!ok) {
+      if (data.detail && data.detail.includes("Master Key")) {
+        toast("Master Key is incorrect! Please update it in Settings.", "error");
+        openSettings(); // Give them a chance to fix it!
+      }
+      return;
+    }
+
     const n = data.username || `User ${data.user_id}`;
     $("#userAvatar").textContent = n[0].toUpperCase();
     $("#dropdownAvatar").textContent = n[0].toUpperCase();
     $("#dropdownName").textContent = n;
     $("#dropdownEmail").textContent = data.email || `ID: ${data.user_id}`;
+    
+    // Decrypted Profile Fields
+    $("#profileNameInput").value = n;
+    if (data.phone) $("#profilePhoneInput").value = data.phone;
+    if (data.profile_pic) {
+       $("#profilePicPreview").src = data.profile_pic;
+       $("#profilePicPreview").style.display = "block";
+       $("#userAvatar").innerHTML = `<img src="${data.profile_pic}" style="width:100%;height:100%;border-radius:50%;object-fit:cover;">`;
+    }
   }
 
   $("#userAvatar")?.addEventListener("click", e => { e.stopPropagation(); const d = $("#userDropdown"); d.style.display = d.style.display === "none" ? "block" : "none"; });
@@ -106,9 +125,28 @@
   function openSettings() { $("#settingsModal").style.display = "flex"; if (eccPrivateKey) $("#userEccPriv").value = eccPrivateKey; }
   $("#settingsBtn")?.addEventListener("click", openSettings);
   $("#closeSettingsModal")?.addEventListener("click", () => $("#settingsModal").style.display = "none");
-  $("#syncKeysBtn")?.addEventListener("click", () => {
-    eccPrivateKey = $("#userEccPriv").value.trim(); if (!eccPrivateKey) return toast("Enter key", "error");
-    saveSession(); checkBanner(); $("#settingsModal").style.display = "none"; fetchUser(); refreshFiles(); toast("Key synced!");
+  $("#syncKeysBtn")?.addEventListener("click", async () => {
+    const inputKey = $("#userEccPriv").value.trim(); 
+    if (!inputKey) return toast("Enter key", "error");
+    
+    const btn = $("#syncKeysBtn");
+    const oldText = btn.innerHTML;
+    btn.disabled = true; btn.textContent = "Verifying Key...";
+
+    // Attempt to verify the key by fetching the profile
+    const kp = `?ecc_private_key=${encodeURIComponent(inputKey)}`;
+    const { ok, data } = await api("GET", `/me${kp}`);
+    
+    btn.disabled = false; btn.innerHTML = oldText;
+
+    if (!ok || (data.username && data.username.includes("Error"))) {
+      return toast("Invalid Master Key for this account!", "error");
+    }
+
+    eccPrivateKey = inputKey;
+    saveSession(); checkBanner(); $("#settingsModal").style.display = "none"; 
+    fetchUser(); refreshFiles(); 
+    toast("Key Verified & Synced!");
   });
   $("#secureResetBtn")?.addEventListener("click", async () => {
     if (!confirm("Delete ALL files?")) return;
@@ -135,13 +173,32 @@
     $("#uploadFileInfo").style.display = "none"; $("#uploadSubmit").disabled = true;
   });
   $("#uploadForm")?.addEventListener("submit", async e => {
-    e.preventDefault(); const fd = new FormData();
-    fd.append("file", $("#fileInput").files[0]); fd.append("ecc_private_key", eccPrivateKey);
-    const btn = $("#uploadSubmit"); btn.disabled = true; btn.textContent = "Encrypting...";
+    e.preventDefault(); 
+    console.log("%c[SECURE DRIVE] 🔐 Starting encryption process...", "color: #3b82f6; font-weight: bold;");
+    const file = $("#fileInput").files[0];
+    console.log(`[SECURE DRIVE] File: ${file.name} (${file.size} bytes)`);
+
+    const fd = new FormData();
+    fd.append("file", file); 
+    fd.append("ecc_private_key", eccPrivateKey);
+    
+    const btn = $("#uploadSubmit"); 
+    btn.disabled = true; 
+    btn.textContent = "Encrypting...";
+    
     const { ok } = await api("POST", "/vault/upload", fd, true);
-    btn.disabled = false; btn.innerHTML = '<span class="material-icons-outlined">upload</span> Encrypt & Upload';
-    if (ok) { toast("Uploaded!"); $("#uploadModal").style.display = "none"; refreshFiles(); }
-    else toast("Upload failed", "error");
+    btn.disabled = false; 
+    btn.innerHTML = '<span class="material-icons-outlined">upload</span> Encrypt & Upload';
+    
+    if (ok) { 
+      console.log("%c[SECURE DRIVE] ✅ Upload Success!", "color: #22c55e; font-weight: bold;");
+      toast("Uploaded!"); 
+      $("#uploadModal").style.display = "none"; 
+      refreshFiles(); 
+    } else { 
+      console.error("[SECURE DRIVE] ❌ Upload Failed");
+      toast("Upload failed", "error"); 
+    }
   });
 
   // ── Share Modal (one-click) ──
@@ -415,12 +472,56 @@
     if (ok) { toast("Renamed"); refreshFiles(); }
   };
 
-  window._updateProfile = async () => {
-    const newName = prompt("Enter new display name:");
-    if (!newName) return;
-    const { ok } = await api("POST", "/profile/update", { display_name: newName });
-    if (ok) { toast("Profile updated"); refreshFiles(); }
+  window._updateProfile = () => {
+    $("#profileNameInput").value = $("#dropdownName").textContent;
+    $("#profileModal").style.display = "flex";
   };
+
+  $("#dropdownEditProfile")?.addEventListener("click", () => { $("#userDropdown").style.display = "none"; window._updateProfile(); });
+  $("#dropdownManageKeys")?.addEventListener("click", () => { $("#userDropdown").style.display = "none"; openSettings(); });
+  $("#closeProfileModal")?.addEventListener("click", () => $("#profileModal").style.display = "none");
+
+  $("#saveProfileBtn")?.addEventListener("click", async () => {
+    if (!eccPrivateKey) return toast("Please enter your Master Key in 'Manage Keys' first!", "error");
+    
+    const newName = $("#profileNameInput").value.trim();
+    const newPhone = $("#profilePhoneInput").value.trim();
+    const picFile = $("#profilePicInput").files[0];
+    
+    let base64Pic = $("#profilePicPreview").src || "";
+    if (picFile) {
+       const reader = new FileReader();
+       base64Pic = await new Promise(res => {
+          reader.onload = e => res(e.target.result);
+          reader.readAsDataURL(picFile);
+       });
+    }
+
+    if (!newName) return;
+    
+    const { ok, data } = await api("POST", "/profile/update", { 
+      username: newName,
+      phone: newPhone,
+      profile_pic: base64Pic,
+      ecc_private_key: eccPrivateKey
+    });
+    if (ok) { 
+      toast("Profile updated & Encrypted ✅"); 
+      $("#profileModal").style.display = "none"; 
+      fetchUser(); 
+    } else {
+      // Show a clear warning — DON'T log out!
+      const msg = (data.detail || "").includes("Master Key") 
+        ? "⚠️ Wrong Master Key! Your key doesn't match this account. Please update it in 'Manage Keys'."
+        : (data.detail || "Profile update failed. Please try again.");
+      toast(msg, "error");
+      // Auto-open key management so they can fix it
+      if ((data.detail || "").includes("Master Key")) {
+        $("#profileModal").style.display = "none";
+        openSettings();
+      }
+    }
+  });
   // ── Nav ──
   $$(".sidebar-item").forEach(item => item.addEventListener("click", () => {
     $$(".sidebar-item").forEach(i => i.classList.remove("active")); item.classList.add("active");

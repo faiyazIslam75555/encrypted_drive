@@ -58,16 +58,37 @@ def secure_sign_and_mac(file_bytes, ecc_priv_key):
     return file_hash, (r, s)
 
 def encrypt_string_asymmetric(text, rsa_pub_key):
-    """Encrypts a string (like a filename) as a single RSA chunk."""
-    m = int.from_bytes(text.encode('utf-8'), 'big')
-    c = rsa_encrypt(m, rsa_pub_key)
-    return hex(c)
+    """Encrypts a string of any length using chunked RSA."""
+    text_bytes = text.encode('utf-8')
+    if not text_bytes: return "0x0"
+    
+    # Use 64 bytes for chunk size (fits comfortably inside 1024-bit RSA)
+    CHUNK_SIZE = 64
+    encrypted_chunks = []
+    
+    for i in range(0, len(text_bytes), CHUNK_SIZE):
+        chunk = text_bytes[i:i+CHUNK_SIZE]
+        padded = b'\x01' + chunk
+        m = int.from_bytes(padded, 'big')
+        c = rsa_encrypt(m, rsa_pub_key)
+        encrypted_chunks.append(hex(c))
+        
+    return "|".join(encrypted_chunks)
 
 def decrypt_string_asymmetric(hex_str, rsa_priv_key):
-    """Decrypts an RSA-encrypted hex string back to a UTF-8 string."""
-    c = int(hex_str, 16)
-    m = rsa_decrypt(c, rsa_priv_key)
-    return m.to_bytes((m.bit_length() + 7) // 8, 'big').decode('utf-8')
+    """Decrypts a chunked RSA-encrypted string back to UTF-8."""
+    if hex_str == "0x0" or not hex_str: return ""
+    
+    chunks = hex_str.split("|")
+    decrypted_bytes = bytearray()
+    
+    for c_str in chunks:
+        c = int(c_str, 16)
+        m = rsa_decrypt(c, rsa_priv_key)
+        b = m.to_bytes((m.bit_length() + 7) // 8, 'big')
+        decrypted_bytes.extend(b[1:]) # strip 0x01 marker
+        
+    return bytes(decrypted_bytes).decode('utf-8')
 
 def encrypt_file_ecc(file_bytes, ecc_pub_key):
     """Encrypts file chunks using ECC ElGamal."""
@@ -85,37 +106,53 @@ def encrypt_file_ecc(file_bytes, ecc_pub_key):
 
 def hybrid_encrypt_ecc(file_bytes, ecc_pub_key):
     """
-    Hybrid Encryption:
-    1. AES Key (random) -> Encrypt File
-    2. ECC -> Encrypt AES Key
+    Hybrid Encryption using ECDH:
+    1. Generate ephemeral key k, K = k*G
+    2. Shared Secret S = k * RecipientPubKey
+    3. AES Key = Hash(S.x)
+    4. Encrypt file with AES
     """
-    from .symmetric import generate_aes_key, aes_encrypt
-    from .ecc import ecc_encrypt
+    from .symmetric import aes_encrypt
+    from .ecc import point_mul, G, N
+    from .hash import scratch_hash
+    import random
     
-    aes_key = generate_aes_key()
+    # 1. Ephemeral Key
+    k = random.randint(1, N - 1)
+    K_pt = point_mul(k, G)
+    
+    # 2. Shared Secret
+    shared_pt = point_mul(k, ecc_pub_key)
+    # Derive a 128-bit AES key from the shared X-coordinate
+    aes_key_hex = scratch_hash(str(shared_pt[0]))[:32] # 16 bytes hex
+    aes_key = bytes.fromhex(aes_key_hex)
+    
+    # 3. Encrypt File
     ciphertext = aes_encrypt(file_bytes, aes_key)
     
-    # Encrypt the AES key (as an integer) using ECC
-    key_int = int.from_bytes(aes_key, 'big')
-    c1, c2 = ecc_encrypt(key_int, ecc_pub_key)
-    
-    wrapped_key = f"{hex(c1[0])},{hex(c1[1])}:{hex(c2[0])},{hex(c2[1])}"
+    wrapped_key = f"{hex(K_pt[0])},{hex(K_pt[1])}"
     return wrapped_key, ciphertext.hex()
 
 def hybrid_decrypt_ecc(wrapped_key, ciphertext_hex, ecc_priv_key):
-    """Hybrid Decryption: ECC decrypts AES key -> AES decrypts file."""
+    """
+    Hybrid Decryption using ECDH:
+    1. Ephemeral Public Key K = (x, y) from wrapped_key
+    2. Shared Secret S = RecipientPrivKey * K
+    3. AES Key = Hash(S.x)
+    4. Decrypt file with AES
+    """
     from .symmetric import aes_decrypt
-    from .ecc import ecc_decrypt
+    from .ecc import point_mul
+    from .hash import scratch_hash
     
-    # Decrypt AES Key
-    pts = wrapped_key.split(":")
-    c1_raw = pts[0].split(",")
-    c2_raw = pts[1].split(",")
-    c1 = (int(c1_raw[0], 16), int(c1_raw[1], 16))
-    c2 = (int(c2_raw[0], 16), int(c2_raw[1], 16))
+    # 1. Parse Ephemeral Public Key
+    pts = wrapped_key.split(",")
+    K_pt = (int(pts[0], 16), int(pts[1], 16))
     
-    m_point = ecc_decrypt(c1, c2, ecc_priv_key)
-    # Recovered 128-bit (16 bytes) TEA key
-    aes_key = m_point[0].to_bytes(16, 'big')
+    # 2. Shared Secret
+    shared_pt = point_mul(ecc_priv_key, K_pt)
+    aes_key_hex = scratch_hash(str(shared_pt[0]))[:32]
+    aes_key = bytes.fromhex(aes_key_hex)
     
+    # 3. Decrypt
     return aes_decrypt(bytes.fromhex(ciphertext_hex), aes_key)
